@@ -1,7 +1,10 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 import json
 import os
+import traceback
 
 from openai import OpenAI
 
@@ -10,6 +13,7 @@ HOST = "127.0.0.1"
 PORT = 8000
 INDEX_HTML_PATH = Path(__file__).with_name("index.html")
 CONFIG_PATH = Path(__file__).with_name("config.json")
+ENV_PATH = Path(__file__).with_name(".env")
 
 
 def load_config():
@@ -24,6 +28,26 @@ def load_config():
     return config
 
 
+def load_dotenv():
+    # Локальный .env нужен для секретов на твоем компьютере.
+    # Формат строки простой: OPENROUTER_API_KEY=твой_ключ
+    if not ENV_PATH.exists():
+        return
+
+    for line in ENV_PATH.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        name, value = line.split("=", 1)
+        name = name.strip()
+        value = value.strip().strip('"').strip("'")
+
+        # Не перезаписываем переменную, если она уже задана в терминале.
+        os.environ.setdefault(name, value)
+
+
 def get_required_env(name):
     # Секреты лучше хранить в переменных окружения, а не прямо в коде.
     value = os.environ.get(name, "").strip()
@@ -36,8 +60,11 @@ def get_required_env(name):
 
 # Системное сообщение задает поведение ассистента.
 # Оно не показывается пользователю, но отправляется модели в каждом запросе.
+load_dotenv()
 CONFIG = load_config()
 SYSTEM_MESSAGE = {"role": "system", "content": CONFIG["system_prompt"]}
+EDGE_TTS_BASE_URL = os.environ.get("EDGE_TTS_BASE_URL", "http://127.0.0.1:5050").rstrip("/")
+EDGE_TTS_API_KEY = os.environ.get("EDGE_TTS_API_KEY", "your_api_key_here")
 
 # Здесь хранится история текущего диалога.
 # Важно: модель не помнит прошлые запросы сама, поэтому мы каждый раз
@@ -61,7 +88,7 @@ def generate_response(text: str):
     dialog_history.append({"role": "user", "content": text})
 
     response = client.responses.create(
-        model="openai/gpt-oss-120b:free",
+        model="nvidia/nemotron-3-super-120b-a12b:free",
         # Отправляем не только последний промпт, а всю историю диалога.
         # Благодаря этому модель видит предыдущие вопросы и свои ответы.
         input=dialog_history,
@@ -80,11 +107,60 @@ def generate_response(text: str):
     return answer
 
 
+def generate_speech(text: str, voice="ru-RU-SvetlanaNeural", speed=1.0):
+    # openai-edge-tts поднимается отдельным локальным сервером.
+    # Наш backend обращается к его OpenAI-совместимому endpoint /v1/audio/speech.
+    payload = {
+        "model": "tts-1",
+        "input": text[:4096],
+        "voice": voice,
+        "response_format": "mp3",
+        "speed": speed,
+    }
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+    }
+
+    if EDGE_TTS_API_KEY:
+        headers["Authorization"] = f"Bearer {EDGE_TTS_API_KEY}"
+
+    request = Request(
+        f"{EDGE_TTS_BASE_URL}/v1/audio/speech",
+        data=body,
+        headers=headers,
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=30) as response:
+            return response.read()
+    except HTTPError as error:
+        error_text = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"TTS-сервер вернул {error.code}: {error_text}") from error
+    except URLError as error:
+        raise RuntimeError(
+            "TTS-сервер недоступен. Запустите openai-edge-tts на http://127.0.0.1:5050"
+        ) from error
+
+
 class DialogHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        # Браузер сам просит favicon.ico для иконки вкладки.
+        # У нас иконки нет, поэтому отвечаем "нет содержимого" без ошибки 404.
+        if self.path == "/favicon.ico":
+            self.send_response(204)
+            self.end_headers()
+            return
+
         # Главная страница клиента: браузер запрашивает ее при открытии сайта.
         if self.path == "/":
             self.send_html(INDEX_HTML_PATH)
+            return
+
+        # Локальная проверка: сервер жив и отвечает без обращения к нейросети.
+        if self.path == "/health":
+            self.send_json({"ok": True})
             return
 
         self.send_json({"error": "Страница не найдена"}, status=404)
@@ -99,6 +175,11 @@ class DialogHandler(BaseHTTPRequestHandler):
         if self.path == "/api/reset":
             reset_dialog_history()
             self.send_json({"ok": True})
+            return
+
+        # API-адрес для озвучки ответа через локальный openai-edge-tts.
+        if self.path == "/api/tts":
+            self.handle_tts_request()
             return
 
         self.send_json({"error": "Маршрут не найден"}, status=404)
@@ -117,6 +198,26 @@ class DialogHandler(BaseHTTPRequestHandler):
             answer = generate_response(prompt)
             self.send_json({"answer": answer})
         except Exception as error:
+            print("Ошибка /api/chat:")
+            traceback.print_exc()
+            self.send_json({"error": str(error)}, status=500)
+
+    def handle_tts_request(self):
+        try:
+            content_length = int(self.headers.get("Content-Length", 0))
+            raw_body = self.rfile.read(content_length)
+            data = json.loads(raw_body.decode("utf-8"))
+            text = data.get("text", "").strip()
+            voice = data.get("voice", "ru-RU-SvetlanaNeural").strip()
+            speed = float(data.get("speed", 1.0))
+
+            if not text:
+                self.send_json({"error": "Текст для озвучки пустой"}, status=400)
+                return
+
+            audio = generate_speech(text, voice=voice, speed=speed)
+            self.send_binary(audio, content_type="audio/mpeg")
+        except Exception as error:
             self.send_json({"error": str(error)}, status=500)
 
     def send_html(self, file_path):
@@ -128,6 +229,13 @@ class DialogHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(page)))
         self.end_headers()
         self.wfile.write(page)
+
+    def send_binary(self, data, content_type):
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def send_json(self, data, status=200):
         # Универсальный метод для JSON-ответов API.

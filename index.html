@@ -34,11 +34,11 @@
     .app {
       min-height: 100vh;
       display: grid;
-      grid-template-rows: auto 1fr auto;
       max-width: 880px;
       margin: 0 auto;
       padding: 24px;
       gap: 16px;
+      grid-template-rows: auto auto 1fr auto;
     }
 
     header {
@@ -74,6 +74,37 @@
       padding: 18px;
       min-height: 420px;
       box-shadow: 0 12px 30px rgba(29, 37, 40, 0.08);
+    }
+
+    .tts-settings {
+      display: grid;
+      gap: 10px;
+      align-items: end;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    select {
+      width: 100%;
+      height: 40px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 10px;
+      background: #ffffff;
+      color: var(--text);
+      font: inherit;
     }
 
     .empty {
@@ -170,6 +201,17 @@
       background: #f7f8fa;
     }
 
+    .tts-test-button {
+      height: 40px;
+      background: #ffffff;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .tts-test-button:hover {
+      background: #f7f8fa;
+    }
+
     .voice-button {
       background: #36454f;
     }
@@ -207,6 +249,10 @@
         max-width: 100%;
       }
 
+      .tts-settings {
+        grid-template-columns: 1fr;
+      }
+
       form {
         grid-template-columns: 1fr;
       }
@@ -226,6 +272,20 @@
         <button class="reset-button" id="reset" type="button">Новый чат</button>
       </div>
     </header>
+
+    <section class="tts-settings">
+      <div class="field">
+        <label for="tts-voice">Голос Edge TTS</label>
+        <select id="tts-voice">
+          <option value="ru-RU-SvetlanaNeural">Svetlana, ru-RU</option>
+          <option value="ru-RU-DmitryNeural">Dmitry, ru-RU</option>
+          <option value="en-US-AvaNeural">Ava, en-US</option>
+          <option value="en-US-AndrewNeural">Andrew, en-US</option>
+          <option value="en-GB-SoniaNeural">Sonia, en-GB</option>
+        </select>
+      </div>
+      <button class="tts-test-button" id="tts-test" type="button">Тест TTS</button>
+    </section>
 
     <section class="chat" id="chat">
       <div class="empty" id="empty">Введите сообщение ниже, и ответ появится здесь.</div>
@@ -247,6 +307,8 @@
     const voiceButton = document.querySelector("#voice");
     const resetButton = document.querySelector("#reset");
     const status = document.querySelector("#status");
+    const ttsVoice = document.querySelector("#tts-voice");
+    const ttsTestButton = document.querySelector("#tts-test");
 
     // SpeechRecognition превращает голос пользователя в текст.
     // В Chrome объект называется webkitSpeechRecognition, поэтому проверяем оба варианта.
@@ -258,6 +320,7 @@
 
     let recognition = null;
     let isListening = false;
+    let currentAudio = null;
 
     function showEmptyState() {
       chat.replaceChildren();
@@ -279,13 +342,23 @@
       chat.scrollTop = chat.scrollHeight;
     }
 
-    function speak(text) {
+    function stopSpeaking() {
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+      }
+
       if (!canSpeak) {
         return;
       }
 
-      // Останавливаем предыдущую озвучку, если пользователь быстро отправил новый запрос.
       window.speechSynthesis.cancel();
+    }
+
+    function speakWithBrowser(text) {
+      if (!canSpeak) {
+        return;
+      }
 
       const phrase = new SpeechSynthesisUtterance(text);
       phrase.lang = "ru-RU";
@@ -293,6 +366,39 @@
       phrase.pitch = 1;
 
       window.speechSynthesis.speak(phrase);
+    }
+
+    async function speak(text) {
+      stopSpeaking();
+      status.textContent = "Генерирую голос...";
+
+      try {
+        const response = await fetch("/api/tts", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            text,
+            voice: ttsVoice.value,
+            speed: 1.0,
+          }),
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || "Не получилось озвучить ответ");
+        }
+
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        currentAudio = new Audio(audioUrl);
+        await currentAudio.play();
+      } catch (error) {
+        console.warn("Edge TTS не сработал, использую голос браузера:", error);
+        addMessage(`TTS недоступен: ${error.message}`, "error");
+        speakWithBrowser(text);
+      }
     }
 
     async function sendPrompt(prompt) {
@@ -305,6 +411,7 @@
       sendButton.disabled = true;
       voiceButton.disabled = true;
       resetButton.disabled = true;
+      ttsTestButton.disabled = true;
       status.textContent = "Нейросеть отвечает...";
 
       try {
@@ -323,7 +430,7 @@
         }
 
         addMessage(data.answer, "bot");
-        speak(data.answer);
+        await speak(data.answer);
         status.textContent = "Готов к диалогу";
       } catch (error) {
         addMessage(error.message, "error");
@@ -332,6 +439,7 @@
         sendButton.disabled = false;
         voiceButton.disabled = !canRecognizeSpeech;
         resetButton.disabled = false;
+        ttsTestButton.disabled = false;
         promptInput.focus();
       }
     }
@@ -340,6 +448,7 @@
       sendButton.disabled = true;
       voiceButton.disabled = true;
       resetButton.disabled = true;
+      ttsTestButton.disabled = true;
       status.textContent = "Очищаю чат...";
 
       // Если микрофон сейчас слушает фразу, останавливаем распознавание.
@@ -347,10 +456,8 @@
         recognition.stop();
       }
 
-      // Если браузер сейчас озвучивает ответ, останавливаем озвучку.
-      if (canSpeak) {
-        window.speechSynthesis.cancel();
-      }
+      // Останавливаем озвучку, если ответ сейчас проигрывается.
+      stopSpeaking();
 
       // Просим сервер очистить dialog_history до одного системного промпта.
       const response = await fetch("/api/reset", {
@@ -382,6 +489,25 @@
         addMessage(error.message, "error");
         status.textContent = "Ошибка очистки";
       } finally {
+        sendButton.disabled = false;
+        voiceButton.disabled = !canRecognizeSpeech;
+        resetButton.disabled = false;
+        ttsTestButton.disabled = false;
+        promptInput.focus();
+      }
+    });
+
+    ttsTestButton.addEventListener("click", async () => {
+      ttsTestButton.disabled = true;
+      sendButton.disabled = true;
+      voiceButton.disabled = true;
+      resetButton.disabled = true;
+
+      try {
+        await speak("Проверка голоса. Если вы слышите эту фразу, локальный Edge TTS работает.");
+        status.textContent = "Готов к диалогу";
+      } finally {
+        ttsTestButton.disabled = false;
         sendButton.disabled = false;
         voiceButton.disabled = !canRecognizeSpeech;
         resetButton.disabled = false;
