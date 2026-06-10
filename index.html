@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Dialog Simulator</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4f1ea;
+      --panel: #ffffff;
+      --text: #1d2528;
+      --muted: #617176;
+      --border: #d8dedb;
+      --accent: #14746f;
+      --accent-dark: #0f5f5b;
+      --user: #e8f4f2;
+      --bot: #f7f8fa;
+      --danger: #a83f39;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 24px;
+      gap: 16px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 26px;
+      line-height: 1.2;
+    }
+
+    .status {
+      color: var(--muted);
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .chat {
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 18px;
+      min-height: 420px;
+      box-shadow: 0 12px 30px rgba(29, 37, 40, 0.08);
+    }
+
+    .empty {
+      height: 100%;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    .message {
+      max-width: 78%;
+      padding: 12px 14px;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .message.user {
+      margin-left: auto;
+      background: var(--user);
+      border: 1px solid #cce5e1;
+    }
+
+    .message.bot {
+      margin-right: auto;
+      background: var(--bot);
+      border: 1px solid var(--border);
+    }
+
+    .message.error {
+      margin-right: auto;
+      color: var(--danger);
+      background: #fff4f2;
+      border: 1px solid #efc6c0;
+    }
+
+    form {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 10px;
+      align-items: end;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 54px;
+      max-height: 180px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      color: var(--text);
+      font: inherit;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(20, 116, 111, 0.14);
+    }
+
+    button {
+      height: 54px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 18px;
+      background: var(--accent);
+      color: white;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--accent-dark);
+    }
+
+    .reset-button {
+      height: 40px;
+      background: #ffffff;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    .reset-button:hover {
+      background: #f7f8fa;
+    }
+
+    .voice-button {
+      background: #36454f;
+    }
+
+    .voice-button:hover {
+      background: #26333b;
+    }
+
+    .voice-button.is-listening {
+      background: var(--danger);
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    @media (max-width: 640px) {
+      .app {
+        padding: 14px;
+      }
+
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .header-actions {
+        width: 100%;
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .message {
+        max-width: 100%;
+      }
+
+      form {
+        grid-template-columns: 1fr;
+      }
+
+      button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>AI Dialog Simulator</h1>
+      <div class="header-actions">
+        <div class="status" id="status">Готов к диалогу</div>
+        <button class="reset-button" id="reset" type="button">Новый чат</button>
+      </div>
+    </header>
+
+    <section class="chat" id="chat">
+      <div class="empty" id="empty">Введите сообщение ниже, и ответ появится здесь.</div>
+    </section>
+
+    <form id="form">
+      <textarea id="prompt" placeholder="Напишите промпт..." autocomplete="off" required></textarea>
+      <button class="voice-button" id="voice" type="button">Голос</button>
+      <button id="send" type="submit">Отправить</button>
+    </form>
+  </main>
+
+  <script>
+    const form = document.querySelector("#form");
+    const promptInput = document.querySelector("#prompt");
+    const chat = document.querySelector("#chat");
+    const empty = document.querySelector("#empty");
+    const sendButton = document.querySelector("#send");
+    const voiceButton = document.querySelector("#voice");
+    const resetButton = document.querySelector("#reset");
+    const status = document.querySelector("#status");
+
+    // SpeechRecognition превращает голос пользователя в текст.
+    // В Chrome объект называется webkitSpeechRecognition, поэтому проверяем оба варианта.
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    // speechSynthesis делает обратное: превращает текст ответа в голос.
+    const canSpeak = "speechSynthesis" in window;
+    const canRecognizeSpeech = Boolean(SpeechRecognition);
+
+    let recognition = null;
+    let isListening = false;
+
+    function showEmptyState() {
+      chat.replaceChildren();
+
+      const emptyMessage = document.createElement("div");
+      emptyMessage.className = "empty";
+      emptyMessage.id = "empty";
+      emptyMessage.textContent = "Введите сообщение ниже, и ответ появится здесь.";
+      chat.append(emptyMessage);
+    }
+
+    function addMessage(text, type) {
+      document.querySelector("#empty")?.remove();
+
+      const message = document.createElement("div");
+      message.className = `message ${type}`;
+      message.textContent = text;
+      chat.append(message);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function speak(text) {
+      if (!canSpeak) {
+        return;
+      }
+
+      // Останавливаем предыдущую озвучку, если пользователь быстро отправил новый запрос.
+      window.speechSynthesis.cancel();
+
+      const phrase = new SpeechSynthesisUtterance(text);
+      phrase.lang = "ru-RU";
+      phrase.rate = 1;
+      phrase.pitch = 1;
+
+      window.speechSynthesis.speak(phrase);
+    }
+
+    async function sendPrompt(prompt) {
+      if (!prompt) {
+        return;
+      }
+
+      addMessage(prompt, "user");
+      promptInput.value = "";
+      sendButton.disabled = true;
+      voiceButton.disabled = true;
+      resetButton.disabled = true;
+      status.textContent = "Нейросеть отвечает...";
+
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ prompt }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Не получилось получить ответ");
+        }
+
+        addMessage(data.answer, "bot");
+        speak(data.answer);
+        status.textContent = "Готов к диалогу";
+      } catch (error) {
+        addMessage(error.message, "error");
+        status.textContent = "Ошибка запроса";
+      } finally {
+        sendButton.disabled = false;
+        voiceButton.disabled = !canRecognizeSpeech;
+        resetButton.disabled = false;
+        promptInput.focus();
+      }
+    }
+
+    async function resetChat() {
+      sendButton.disabled = true;
+      voiceButton.disabled = true;
+      resetButton.disabled = true;
+      status.textContent = "Очищаю чат...";
+
+      // Если микрофон сейчас слушает фразу, останавливаем распознавание.
+      if (isListening && recognition) {
+        recognition.stop();
+      }
+
+      // Если браузер сейчас озвучивает ответ, останавливаем озвучку.
+      if (canSpeak) {
+        window.speechSynthesis.cancel();
+      }
+
+      // Просим сервер очистить dialog_history до одного системного промпта.
+      const response = await fetch("/api/reset", {
+        method: "POST",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Не получилось очистить чат");
+      }
+
+      promptInput.value = "";
+      showEmptyState();
+      status.textContent = "Новый чат начат";
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const prompt = promptInput.value.trim();
+      await sendPrompt(prompt);
+    });
+
+    resetButton.addEventListener("click", async () => {
+      try {
+        await resetChat();
+      } catch (error) {
+        addMessage(error.message, "error");
+        status.textContent = "Ошибка очистки";
+      } finally {
+        sendButton.disabled = false;
+        voiceButton.disabled = !canRecognizeSpeech;
+        resetButton.disabled = false;
+        promptInput.focus();
+      }
+    });
+
+    if (canRecognizeSpeech) {
+      recognition = new SpeechRecognition();
+      recognition.lang = "ru-RU";
+      recognition.interimResults = false;
+      recognition.continuous = false;
+
+      recognition.addEventListener("start", () => {
+        isListening = true;
+        voiceButton.classList.add("is-listening");
+        voiceButton.textContent = "Слушаю";
+        status.textContent = "Говорите...";
+      });
+
+      recognition.addEventListener("result", async (event) => {
+        // Берем самый вероятный распознанный текст из результата браузера.
+        const transcript = event.results[0][0].transcript.trim();
+        promptInput.value = transcript;
+
+        // После распознавания сразу отправляем текст в наш обычный /api/chat.
+        await sendPrompt(transcript);
+      });
+
+      recognition.addEventListener("end", () => {
+        isListening = false;
+        voiceButton.classList.remove("is-listening");
+        voiceButton.textContent = "Голос";
+
+        if (!sendButton.disabled) {
+          status.textContent = "Готов к диалогу";
+        }
+      });
+
+      recognition.addEventListener("error", (event) => {
+        isListening = false;
+        voiceButton.classList.remove("is-listening");
+        voiceButton.textContent = "Голос";
+        addMessage(`Ошибка распознавания речи: ${event.error}`, "error");
+        status.textContent = "Ошибка микрофона";
+      });
+    } else {
+      voiceButton.disabled = true;
+      voiceButton.title = "Этот браузер не поддерживает распознавание речи";
+    }
+
+    voiceButton.addEventListener("click", () => {
+      if (!recognition) {
+        addMessage("Этот браузер не поддерживает распознавание речи.", "error");
+        return;
+      }
+
+      if (isListening) {
+        recognition.stop();
+        return;
+      }
+
+      sendButton.disabled = true;
+      recognition.start();
+    });
+  </script>
+</body>
+</html>
