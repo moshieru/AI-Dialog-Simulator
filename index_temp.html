@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
+
+        .page-content {
+            width: 100%;
+        }
+
+        .hoverTransition {
+            transition: 0.3s;
+        }
+
+        h2 {
+            font-family: 'Roboto', sans-serif;
+            text-align: center;
+        }
+
+        .page-main {
+            margin: 0px 0px 0px 50px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            font-family: 'Roboto', sans-serif;
+        }
+
+        .head {
+            display: flex;
+            color: white;
+            flex-direction: row;
+            margin: 25px 0 30px 0;
+            max-width: 1620px;
+            width: 97%;
+            background-image: url("Rectangle.png");
+            background-repeat: no-repeat;
+            height: 300px;
+            border-radius: 10px;
+            justify-content: space-between;
+        }
+
+        .head-left-block {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 40px;
+        }
+
+        .head-right-block {
+            display: flex;
+            flex-direction: row;
+        }
+
+        .head h1 {
+            font-family: 'Roboto', sans-serif;
+            margin-bottom: 20px;
+        }
+
+        .head li {
+            list-style-type: '·';
+        }
+
+        .shopHeader {
+            margin-top: 0;
+            margin-bottom: 0;
+            font-size: 20px;
+            font-weight: 500;
+        }
+
+        .headerBlocks {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            padding: 40px;
+        }
+
+        .headerBlock {
+            width: 210px;
+            height: 100px;
+            border-radius: 8px;
+            background-color: #FFFFFF1A;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .stat {
+            font-size: 24px;
+            margin: 0;
+            padding: 16px 0 0 16px;
+            font-weight: 500;
+        }
+
+        .statDesc {
+            font-size: 15px;
+            margin: 0;
+            font-weight: 300;
+            padding: 0 0 0 16px;
+        }
+
+        .stats {
+            width: max-content;
+            display: flex;
+            margin-top: 10px;
+        }
+
+        .headButtons {
+            margin-top: 35px;
+        }
+
+        .head button {
+            width: 160px;
+            height: 48px;
+            border-radius: 10px;
+            color: #505C98;
+            background-color: #EEEFF5;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+        }
+
+        .head hr {
+            width: 510px;
+            margin-top: 20px;
+            margin-bottom: 20px;
+            margin-left: 0;
+            border-color: #CDCDCD;
+        }
+
+        .head .btnBlue {
+            margin: 0;
+        }
+
+        .head .btnBlue:hover {
+            transition: 0.3s;
+            background-color: #F7F7FA;
+            color: #505C98;
+        }
+
+        .head #btnBlue1:hover {
+            background-color: #505C98;
+        }
+
+        .head #btnBlue1 {
+            margin-right: 10px;
+            width: 180px;
+            height: 48px;
+            border-radius: 10px;
+            color: #ffffff;
+            background-color: #2C3979;
+        }
+
+        .head .headButtons {
+            height: fit-content;
+        }
+
+        .app-container {
+            max-width: 1620px;
+            width: 97%;
+            height: 800px;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 0 7px 2px rgba(34, 60, 80, 0.01);
+            display: flex;
+            overflow: hidden;
+            margin-bottom: 25px;
+        }
+
+        .sidebar {
+            width: 328px;
+            min-width: 260px;
+            background: #fafafa;
+            border-right: 2px solid #e7e7e7;
+            display: flex;
+            flex-direction: column;
+            padding: 25px 0 0 25px;
+        }
+
+        .sidebar-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a2e;
+            padding-bottom: 25px;
+            border-bottom: 2px solid #E7E7E7;
+            margin-bottom: 25px;
+        }
+
+        .btn-new-call {
+            background-color: rgba(255, 255, 255, 0);
+            color: #333;
+            border: 1px solid #CCCCCC;
+            padding: 8px 16px;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            margin-bottom: 10px;
+            transition: background 0.2s;
+            align-self: flex-start;
+        }
+
+        .btn-new-call:hover {
+            background: #2d3a6e;
+            color: #fff;
+        }
+
+        .btn-history {
+            background-color: rgba(255, 255, 255, 0);
+            color: #333;
+            border: 1px solid #CCCCCC;
+            padding: 8px 16px;
+            border-radius: 12px;
+            font-size: 16px;
+            cursor: pointer;
+            margin-bottom: 25px;
+            transition: background 0.2s;
+            align-self: flex-start;
+        }
+
+        .btn-history:hover {
+            background: #2d3a6e;
+            color: #fff;
+        }
+
+        .recent-label {
+            font-size: 20px;
+            color: #1a1a2e;
+            margin-bottom: 10px;
+            user-select: none;
+        }
+
+        .recent-label .arrow {
+            font-size: 12px;
+            margin-left: 4px;
+        }
+
+        .recent-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            margin: 0;
+            padding: 0;
+        }
+
+        .recent-list li {
+            padding: 10px;
+            border-radius: 4px 0 0 4px;
+            font-size: 14px;
+            color: #444;
+            cursor: pointer;
+            transition: background 0.15s;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .recent-list li:hover {
+            background: #EEEFF5;
+        }
+
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .chat-header {
+            text-align: right;
+            border-bottom: 2px solid #e7e7e7;
+            height: 79px;
+        }
+
+        .chat-header .status {
+            font-size: 20px;
+            color: #888;
+            font-style: italic;
+            font-weight: 200;
+            margin: 0;
+            padding: 25px 150px 25px 25px;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 0 150px 0 150px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 40px;
+            justify-content: end;
+        }
+
+        .message {
+            max-width: 600px;
+            padding: 12px 16px;
+            font-size: 20px;
+            line-height: 1.5;
+            color: #1a1a1a;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: #E7E7E7;
+            border-radius: 16px 16px 4px 16px;
+        }
+
+        .message.ai {
+            align-self: flex-start;
+            background: transparent;
+            border-radius: 4px 16px 16px 16px;
+        }
+
+        .chat-footer {
+            padding: 0 150px;
+            height: 100px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 25px;
+        }
+
+        .chat-footer .hint {
+            font-size: 20px;
+            color: #888;
+            font-style: italic;
+        }
+
+        .mic-btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: #2d3a6e;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s, transform 0.15s;
+            flex-shrink: 0;
+        }
+
+        .mic-btn img {
+            width: 24px;
+        }
+
+        .mic-btn:hover {
+            background: #1e2a5a;
+            transform: scale(1.2);
+        }
+
+        .mic-btn:active {
+            transform: scale(1);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page-content">
+        <div class="page-main" onresize="">
+            <div class="head">
+                <div class="head-left-block">
+                    <h1>ИИ-тренажер звонка</h1>
+                    <div class="headButtons">
+                        <button class="btnBlue hoverTransition" id="btnBlue1"
+                            onclick="document.querySelector('.prizesBlock').scrollIntoView({behavior: 'smooth', block: 'start'})">Начать
+                            тренировку
+                        </button>
+                    </div>
+                </div>
+                <div class="head-right-block">
+                    <div class="headerBlocks">
+                        <div class="headerBlock">
+                            <p class="stat">267</p>
+                            <p class="statDesc">тренировок звонков<br>проведено</p>
+                        </div>
+                        <div class="headerBlock">
+                            <p class="stat">12 879</p>
+                            <p class="statDesc">пользователей<br>ежедневно тренируются </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="app-container">
+                <!-- Сайдбар -->
+                <aside class="sidebar">
+                    <div class="sidebar-title">ИИ-тренажер звонков</div>
+
+                    <button class="btn-new-call">Новый звонок</button>
+                    <button class="btn-history">История звонков</button>
+
+                    <div class="recent-label">Недавнее</div>
+
+                    <ul class="recent-list">
+                        <li class="active">Lorem ipsum dolor sit amet, consectetur...</li>
+                        <li>Etiam vulputate commodo elementum</li>
+                        <li>Aliquam justo purus, facilisis sed gravida...</li>
+                    </ul>
+                </aside>
+
+                <!-- Чат -->
+                <main class="chat-area">
+                    <div class="chat-header">
+                        <p class="status">Нейросеть отвечает...</p>
+                    </div>
+
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="message user">Алло, здравствуйте!</div>
+                        <div class="message ai">Алло, слушаю. Кто говорит?</div>
+                        <div class="message user">Меня зовут Мария, я риелтор из компании Этажи, хочу помочь продать
+                            вашу
+                            квартиру.</div>
+                        <div class="message ai">Спасибо, но я сам планирую продать. У меня уже есть объявление на Авито,
+                            и
+                            комиссию платить не хочу. Если что-то изменится — сам позвоню.</div>
+                        <div class="message user">Ну и ладно! Не хотите, как хотите, до свидания.</div>
+                        <div class="message ai">До свидания.</div>
+                    </div>
+
+                    <div class="chat-footer">
+                        <span class="hint">Нажмите на кнопку микрофона, чтобы начать разговор</span>
+                        <button class="mic-btn" id="micBtn" title="Начать разговор">
+                            <img src="mic.png" alt="Микрофон">
+                        </button>
+                    </div>
+                </main>
+            </div>
+        </div>
+    </div>
+</body>
+
+</html>
