@@ -157,7 +157,7 @@ class DialogHandler(BaseHTTPRequestHandler):
             self.send_json({"error": str(error)}, status=500)
 
     def send_html(self, file_path):
-        # Читаем index.html с диска и отправляем его браузеру как HTML-страницу.
+        
         page = file_path.read_text(encoding="utf-8").encode("utf-8")
 
         self.send_response(200)

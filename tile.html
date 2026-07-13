@@ -1,0 +1,325 @@
+<%
+flag = 0;
+if( tools_web.check_object(curObject, "collaborator") )
+{
+	iPersonID = curObjectID;
+}
+else
+{
+	iPersonID = curUserID;
+	flag = 1;
+}
+achievement_array = XQuery("sql: select dbo.qualifications.id, dbo.qualifications.name from dbo.qualification_assignments INNER JOIN dbo.qualifications on dbo.qualification_assignments.qualification_id = dbo.qualifications.id where person_id = "+iPersonID);
+all_achievements = XQuery("sql: SELECT * FROM dbo.qualifications WHERE join_mode = 'close'");
+ach_quantity = ArrayCount(all_achievements);
+certificates_array = XQuery("sql: select * from dbo.certificates where person_id = "+iPersonID);
+person_place_array = XQuery("sql: select * from public.esoft_ratings_places where webtutor_id = '"+iPersonID+"'");
+person_place = 0;
+if(ArrayCount(person_place_array)!=0){
+	for(i in person_place_array){person_place = i.today_place}
+}
+if(flag == 1){
+	billing_array = XQuery("sql: select * from dbo.accounts where object_id = "+curUser.id+" and currency_type_id = 'bonus'");
+	if(ArrayCount(billing_array)!=0){
+		billing_item = ArrayOptFirstElem(billing_array);
+		etcoins = billing_item.balance;
+	}
+	else{
+		etcoins = '0';
+	}
+}
+	check = false;
+
+	curr_user = OpenDoc(UrlFromDocID(curUserID));
+	iPersonPosID = curr_user.TopElem.position_id;
+	post_obj = OpenDoc(UrlFromDocID(Int(iPersonPosID)));
+	iPersonPosCode = post_obj.TopElem.code;
+
+	spn_codes = spn_codes.split(";");
+
+	for(h in spn_codes){
+		if(Int(h) == Int(Trim(iPersonPosCode))){
+			check = true;
+		}
+	}
+	
+	function drawTrackInfo(){
+		info = "";
+
+		activeTrack = ArrayOptFirstElem(XQuery("sql: SELECT * FROM career_tracks.collabs_tracks WHERE collab_id = '" + curUserID + "' AND main_or_not = 'true'"));
+		activeTrackName = "";
+		activeTrackPercent = 0;
+
+		if(activeTrack != undefined){
+			activeTrackInfo = ArrayOptFirstElem(XQuery("sql: SELECT * FROM career_tracks.tracks WHERE id = '" + activeTrack.track_id + "'"));
+			activeTrackName = activeTrackInfo.name;
+			activeTrackPercent = activeTrack.percent;
+		} else{
+			activeTrackName = "Старт в недвижимости";
+		}
+
+		info += '<p style="margin: 0 auto 0 auto; font-size: 13px; color: #626262;" class="careerTrackText">' + activeTrackName + '</p>
+				<div class="careerBarBottom"><p id="careerBarPercent">' + activeTrackPercent + '%</p>
+					<div class="careerBarTop" style="width: ' + activeTrackPercent + '%;"></div>
+				</div>';
+
+		return info;
+	}
+%>
+<style>
+.game_block {
+	display: flex;
+    padding: 0.7em 1.6em;
+    width: 100%;
+    max-width: 210px;
+    /*background-color: #F7F7FA;*/
+    background-color: #fbfbfb;
+    box-shadow: 0px 0px 7px 2px rgba(34, 60, 80, 0.1);
+    border-radius: 8px;
+    align-items: flex-start;
+    justify-content: center;
+    cursor: pointer;
+    position: relative;
+}
+.game_block:hover {
+    box-shadow: 0px 0px 7px 5px rgba(34, 60, 80, 0.1);
+    transition: 0.1s;
+}
+.game_subblock {
+	display: flex;
+	flex-direction: column;
+	text-align: center;
+}
+.game_row {
+	display: flex;
+	gap: 10px;
+	flex-wrap: wrap;
+	margin: 0 auto;
+}
+.game_counter {
+    background-color: #ebebeb;
+    border-radius: 10px;
+    font-size: 11px;
+    color: #919191;
+    position: absolute;
+    padding: 4px 8px;
+    bottom: 6px;
+    right: 8px;
+}
+.h5Gamification {
+	margin-bottom: 5px;
+}
+.careerBarBottom {
+    width: 160px;
+    background-color: #E3E3E3;
+    height: 14px;
+    margin: 0 auto;
+    border-radius: 7px;
+    position: relative;	
+}
+.barBottom {
+    width: 160px;
+    background-color: #E3E3E3;
+    height: 14px;
+    margin: 0 auto;
+    border-radius: 7px;
+    position: relative;
+}
+.careerBarTop {
+    width: 160px;
+    background-color: #E3E3E3;
+    height: 14px;
+    margin: 0 auto;
+    border-radius: 7px;
+    position: relative;	
+}
+.barTop {
+    position: absolute;
+    background-color: #B9D2B8;
+    height: 13px;
+    border-radius: 7px;
+    top: 1px;
+}
+#careerBarPercent {
+    font-size: 12px;
+    font-weight: 500;
+    margin: 0;
+    height: 14px !important;
+    position: absolute;
+    z-index: 1;
+    left: 0;
+    right: 0;
+}
+#barPercent {
+    font-size: 12px;
+    font-weight: 500;
+    margin: 0;
+    height: 14px !important;
+    position: absolute;
+    z-index: 1;
+    left: 0;
+    right: 0;
+}
+</style>
+<div style="display: flex;width: 92%;padding: 1em; gap: 15px; flex-wrap: wrap; flex-direction: row; justify-content: center;">
+	<%if(flag == 1){%>
+		<div class="game_block" onclick="openIFrameOnClick('balance');">
+			<div class="game_subblock">
+				<h5 style="font-size: 16px; color: #0c0c0c;" class="h5Gamification">Мой баланс</h5>
+				<div class="game_row" style="gap: 5px">
+					<span style="font-size:28px;"><%=etcoins%> </span><img src="http://education.etagi.com/download_file.html?file_id=7413968076784075949" style="width: 32px; height: 32px; margin-top: 1px;">
+				</div>
+			</div>
+		</div>
+	<div class="game_block" onclick="openIFrameOnClick('achieve');">
+		<div class="game_subblock">
+			<h5 style="font-size: 16px; color: #0c0c0c;" class="h5Achievments">Мои достижения</h5>
+			<div class="game_row">
+				<%
+				if(ArrayCount(achievement_array)>0){
+					i = 0;
+					for(achive in achievement_array){
+						achive_doc = OpenDoc(UrlFromDocID(achive.id));
+						if(i <= 2 && achive_doc.TopElem.join_mode == 'close'){
+							%><img width="33" src="download_file.html?file_id=7396974137347600751"/><%
+						}else{}
+						if(achive_doc.TopElem.join_mode == 'close'){i++;}
+					}
+					collab_ach_quantity = i;
+				}else{
+					%><p style="margin:0;">Ничего нет</p><%
+					collab_ach_quantity = 0;
+				}
+				%>
+			</div>
+		</div>
+		<%if(flag == 1){%>
+		<div class="game_counter">
+			<%=collab_ach_quantity%> из <%=ach_quantity%>
+		</div>
+		<%}%>
+	</div>
+	<div class="game_block" onclick="openIFrameOnClick('cert');">
+		<div class="game_subblock">
+			<h5 style="font-size: 16px; color: #0c0c0c;">Мои сертификаты</h5>
+			<div class="game_row">
+				<%
+				if(ArrayCount(certificates_array)>0){
+					i = 0;
+					for(certificate in certificates_array){
+						certificate_doc = OpenDoc(UrlFromDocID(certificate.type_id));
+						if(i <= 2){
+							%><img width="30" src="download_file.html?file_id=7396974222928242661"/><%
+						}else{}
+						i++;
+					}
+					collab_cert_quantity = i;
+				}else{
+					collab_cert_quantity = 0;
+					%><p style="margin:0;">Ничего нет</p><%
+				}
+				%>
+			</div>
+		</div>
+		<%if(flag == 1){%>
+		<div class="game_counter">
+			<%=collab_cert_quantity%>
+		</div>
+		<%}%>
+	</div>
+	<%}%>
+
+
+	<%if(flag == 1){%>
+	<div class="game_block rating_game_block career_track_main_block" onclick="openIFrameOnClick('track');">
+		<div class="game_subblock">
+			<h5 style="font-size: 16px; color: #0c0c0c;">Мой карьерный трек</h5>
+			<div class="game_row" style="gap: 5px">
+				<!--<img style="width: 25px; height: 25px;" src="download_file.html?file_id=7390215270423048239">-->
+				<p style="margin: 0 auto 0 auto; font-size: 13px; color: #626262;" class="careerTrackGamificationText">Начни свое развитие!</p>
+				<div class="barBottom"><p id="barPercent"></p>
+					<div class="barTop"></div>
+				</div>
+				<!--<p style="margin: 5px 0 0 0; font-size: 13px;">Начни свое развитие!</p>-->
+			</div>
+		</div>
+	</div>
+	<%}
+	else{%>
+	<div class="game_block rating_game_block career_track_main_block" onclick="openIFrameOnClick('track');">
+		<div class="game_subblock">
+			<h5 style="font-size: 16px; color: #0c0c0c;">Карьерный трек</h5>
+			<div class="game_row" style="gap: 5px">
+				<!--<img style="width: 25px; height: 25px;" src="download_file.html?file_id=7390215270423048239">-->
+				<p style="margin: 0 auto 0 auto; font-size: 13px; color: #626262;" class="careerTrackGamificationText"></p>
+				<div class="barBottom"><p id="barPercent"></p>
+					<div class="barTop"></div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<%}%>
+
+	<%if(flag == 1 && check == true){%>
+	<div class="game_block rating_game_block career_track_block" onclick="openIFrameOnClick('rieltor_track');">
+		<div class="game_subblock">
+			<h5 style="font-size: 16px; color: #0c0c0c;">Мой карьерный трек</h5>
+			<div class="game_row" style="gap: 5px">
+				<!--<img style="width: 25px; height: 25px;" src="download_file.html?file_id=7390215270423048239">-->
+				<%=drawTrackInfo()%>
+				<!--<p style="margin: 5px 0 0 0; font-size: 13px;">Начни свое развитие!</p>-->
+			</div>
+		</div>
+	</div>
+	<%}%>
+
+	<%if(flag == 1){%>
+	<div class="game_block rating_game_block" onclick="window.open('http://education.etagi.com/_wt/rating', '_blank')">
+		<div class="game_subblock">
+			<h5 style="font-size: 16px; color: #0c0c0c;">Рейтинг пользователей</h5>
+			<div class="game_row">
+				<img width="33" src="http://education.etagi.com/download_file.html?file_id=7396974528226930609">
+			</div>
+		</div>
+		<%if(flag == 1 && person_place > 0){%>
+		<div class="game_counter">
+			<%=person_place%> место
+		</div>
+		<%}%>
+	</div>
+	<%}%>
+</div>
+
+<script>
+function openIFrameOnClick(message){
+	window.top.postMessage(message, '*');
+}
+function displayRateGameBlock(){
+	if(window.outerWidth > 1168){
+		//document.querySelector('.rating_game_block').style.display = "none";
+	}else{
+		document.querySelector('.rating_game_block').style.display = "block";
+	}
+}
+function addAchQuantity(){
+	<%if(flag == 1){%>
+	document.querySelector('.h5Achievments').innerHTML += '<span style="font-size: 14px;"> (<%=collab_ach_quantity%> из <%=ach_quantity%>)</span>';
+	<%}%>
+}
+$(document).ready(function(){
+	if(window.outerWidth > 1168){
+		//document.querySelector('.rating_game_block').style.display = "none";
+	}
+
+	//скрываем Карьерный трек с Главной
+	try{document.querySelector('.mainBlock').style.display = "none";}
+	catch(e){document.querySelector('.career_track_main_block').style.display = "none";}
+
+	document.querySelector('.careerTrackGamificationText').textContent = localStorage.getItem('currentLevel') + ' уровень';
+	document.querySelector('#barPercent').textContent = localStorage.getItem('currentLevelPercent') + '%';
+	document.querySelector('.barTop').style.width = localStorage.getItem('currentLevelPercent') + '%';
+	//addAchQuantity();
+});
+window.onresize = displayRateGameBlock;
+
+</script>

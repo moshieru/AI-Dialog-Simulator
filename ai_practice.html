@@ -1,0 +1,1152 @@
+<%
+// =========================
+// SERVER-SIDE JS ДЛЯ WEBTUTOR
+// =========================
+// Этот блок работает на сервере WT. Он:
+// 1. принимает ajax-запросы со страницы;
+// 2. пишет сессии и сообщения в БД;
+// 3. вызывает OpenRouter;
+// 4. возвращает браузеру JSON.
+
+var OPENROUTER_API_KEY = "api"; // Вставить ключ только на сервере, не в браузерный JS.
+var OPENROUTER_MODEL = "tencent/hy3:free";
+
+var ROLE_SYSTEM = 1;
+var ROLE_USER = 2;
+var ROLE_ASSISTANT = 3;
+var TYPE_CALL = 1;
+var MAX_HISTORY_MESSAGES = 8; // Берем только последние реплики, чтобы не упереться в лимит токенов модели.
+
+var SYSTEM_PROMPT = "Ты — ИИ-тренажер и играешь роль продавца квартиры. Пользователь — риелтор, который звонит тебе по поводу продажи. Веди себя как реальный собственник: в начале осторожно и немного недоверчиво, но без грубости. Квартира: 2-комнатная, обычное жилое состояние, продаешь сам, хочешь купить жилье побольше, цену считаешь справедливой, комиссию платить не хочешь. Не раскрывай всю информацию сразу, отвечай только на вопросы пользователя. Если риелтор вежлив, задает хорошие вопросы, не давит и объясняет пользу — постепенно становись открытее. Если спорит, давит, пугает или сразу продает услугу — сопротивляйся. Используй возражения: «Я сам продам», «Не хочу платить комиссию», «Вы будете сбивать цену», «У меня уже есть объявление», «Мне нужно подумать», «Что вы конкретно будете делать?». Отвечай коротко, живо, как в телефонном разговоре. Не подсказывай пользователю и не оценивай его во время диалога. Начни с фразы: «Алло, слушаю».";
+
+function getQueryValue(name) {
+    try {
+        return String(Request.Query.GetOptProperty(name, ""));
+    } catch (e1) {}
+
+    try {
+        return String(Request.QueryString.GetOptProperty(name, ""));
+    } catch (e2) {}
+
+    try {
+        return String(Request.QueryString.GetProperty(name));
+    } catch (e3) {}
+
+    return "";
+}
+
+function getFormValue(name) {
+    try {
+        return String(Request.Form.GetOptProperty(name, ""));
+    } catch (e1) {}
+
+    try {
+        return String(Request.Body.GetOptProperty(name, ""));
+    } catch (e2) {}
+
+    return getQueryValue(name);
+}
+
+function toInt(value) {
+    var result = parseInt(String(value), 10);
+    if (isNaN(result)) {
+        return 0;
+    }
+    return result;
+}
+
+function sqlText(value) {
+    var quote = String.fromCharCode(39);
+    return "N" + quote + String(value).split(quote).join(quote + quote) + quote;
+}
+
+function sqlInt(value) {
+    return String(toInt(value));
+}
+
+function jsonEscape(value) {
+    return String(value)
+        .split("\\").join("\\\\")
+        .split("\"").join("\\\"")
+        .split("\r").join("\\r")
+        .split("\n").join("\\n")
+        .split("\t").join("\\t");
+}
+
+function jsonString(value) {
+    return "\"" + jsonEscape(value) + "\"";
+}
+
+function firstRow(rows) {
+    if (rows == undefined || ArrayCount(rows) == 0) {
+        return undefined;
+    }
+    return ArrayOptFirstElem(rows);
+}
+
+function db(sql) {
+    return XQuery("sql: " + sql);
+}
+
+function apiOk(fields) {
+    return "{\"ok\":true" + fields + "}";
+}
+
+function apiError(message) {
+    return "{\"ok\":false,\"error\":" + jsonString(message) + "}";
+}
+
+function getCurrentUserId() {
+    try {
+        return Int(curUserID);
+    } catch (e1) {}
+
+    try {
+        return Int(curUser.id);
+    } catch (e2) {}
+
+    return 0;
+}
+
+function createSession() {
+    var userId = getCurrentUserId();
+
+    db(
+        "INSERT INTO ai_practice.dialog_sessions (name, type_id, user_id, created_at) " +
+        "VALUES (N'Новый звонок', " + TYPE_CALL + ", " + sqlInt(userId) + ", GETDATE())"
+    );
+
+    var rows = db(
+        "SELECT TOP 1 id FROM ai_practice.dialog_sessions " +
+        "WHERE user_id = " + sqlInt(userId) + " AND type_id = " + TYPE_CALL + " " +
+        "ORDER BY id DESC"
+    );
+
+    var session = firstRow(rows);
+    var sessionId = toInt(session.id);
+
+    // Системный промпт тоже сохраняем как сообщение: так потом понятно,
+    // с какими правилами проходил конкретный звонок.
+    db(
+        "INSERT INTO ai_practice.dialog_messages (session_id, role_id, content) VALUES (" +
+        sqlInt(sessionId) + ", " + ROLE_SYSTEM + ", " + sqlText(SYSTEM_PROMPT) + ")"
+    );
+
+    return sessionId;
+}
+
+function getOwnedSession(sessionId) {
+    return firstRow(db(
+        "SELECT TOP 1 id, name FROM ai_practice.dialog_sessions " +
+        "WHERE id = " + sqlInt(sessionId) + " AND user_id = " + sqlInt(getCurrentUserId())
+    ));
+}
+
+function ensureSession(sessionId) {
+    if (sessionId > 0 && getOwnedSession(sessionId) != undefined) {
+        return sessionId;
+    }
+    return createSession();
+}
+
+function saveMessage(sessionId, roleId, content) {
+    db(
+        "INSERT INTO ai_practice.dialog_messages (session_id, role_id, content) VALUES (" +
+        sqlInt(sessionId) + ", " + sqlInt(roleId) + ", " + sqlText(content) + ")"
+    );
+}
+
+function updateSessionNameFromPrompt(sessionId, prompt) {
+    var session = getOwnedSession(sessionId);
+    if (session == undefined || String(session.name) != "Новый звонок") {
+        return;
+    }
+
+    var title = String(prompt).split("\r").join(" ").split("\n").join(" ").split("\t").join(" ");
+    while (title.indexOf("  ") >= 0) {
+        title = title.split("  ").join(" ");
+    }
+    if (title.length > 48) {
+        title = title.substring(0, 48) + "...";
+    }
+
+    db(
+        "UPDATE ai_practice.dialog_sessions SET name = " + sqlText(title) +
+        " WHERE id = " + sqlInt(sessionId) + " AND user_id = " + sqlInt(getCurrentUserId())
+    );
+}
+
+function getMessagesForModel(sessionId) {
+    var rows = db(
+        "SELECT role_name, content FROM (" +
+        "SELECT TOP " + MAX_HISTORY_MESSAGES + " m.id, r.role AS role_name, m.content " +
+        "FROM ai_practice.dialog_messages m " +
+        "INNER JOIN ai_practice.roles r ON r.id = m.role_id " +
+        "WHERE m.session_id = " + sqlInt(sessionId) + " AND m.role_id IN (" + ROLE_USER + ", " + ROLE_ASSISTANT + ") " +
+        "ORDER BY m.id DESC" +
+        ") last_messages ORDER BY id ASC"
+    );
+
+    var messages = [];
+    messages.push({ role: "system", content: SYSTEM_PROMPT });
+
+    for (row in rows) {
+        messages.push({
+            role: String(row.role_name),
+            content: String(row.content)
+        });
+    }
+
+    return messages;
+}
+
+function messagesToJson(messages) {
+    var parts = [];
+
+    for (i = 0; i < messages.length; i++) {
+        parts.push(
+            "{\"role\":" + jsonString(messages[i].role) +
+            ",\"content\":" + jsonString(messages[i].content) + "}"
+        );
+    }
+
+    return "[" + parts.join(",") + "]";
+}
+
+function parseJson(text) {
+    try {
+        return JSON.parse(text);
+    } catch (e1) {
+        return eval("(" + text + ")");
+    }
+}
+
+function requestOpenRouter(messages) {
+    if (OPENROUTER_API_KEY == "" || OPENROUTER_API_KEY == "PASTE_OPENROUTER_API_KEY_HERE") {
+        throw "OPENROUTER_API_KEY не заполнен в server-side блоке";
+    }
+
+    var body =
+        "{\"model\":" + jsonString(OPENROUTER_MODEL) +
+        ",\"messages\":" + messagesToJson(messages) +
+        ",\"temperature\":0.7" +
+        ",\"max_tokens\":260}";
+
+    var http = new ActiveXObject("MSXML2.ServerXMLHTTP.6.0");
+    http.open("POST", "https://openrouter.ai/api/v1/chat/completions", false);
+    http.setRequestHeader("Content-Type", "application/json");
+    http.setRequestHeader("Authorization", "Bearer " + OPENROUTER_API_KEY);
+    http.setRequestHeader("HTTP-Referer", "https://education.etagi.com");
+    http.setRequestHeader("X-Title", "AI Practice");
+    http.send(body);
+
+    if (http.status < 200 || http.status >= 300) {
+        throw "OpenRouter вернул ошибку " + http.status + ": " + http.responseText;
+    }
+
+    var data = parseJson(http.responseText);
+    return String(data.choices[0].message.content);
+}
+
+function handleChat() {
+    var prompt = getFormValue("prompt");
+    var sessionId = ensureSession(toInt(getFormValue("session_id")));
+
+    if (prompt == "") {
+        return apiError("Пустой текст сообщения");
+    }
+
+    saveMessage(sessionId, ROLE_USER, prompt);
+    updateSessionNameFromPrompt(sessionId, prompt);
+
+    var answer = requestOpenRouter(getMessagesForModel(sessionId));
+    saveMessage(sessionId, ROLE_ASSISTANT, answer);
+
+    var session = getOwnedSession(sessionId);
+    return apiOk(
+        ",\"session_id\":" + sqlInt(sessionId) +
+        ",\"session_name\":" + jsonString(session.name) +
+        ",\"answer\":" + jsonString(answer)
+    );
+}
+
+function handleNewSession() {
+    var sessionId = createSession();
+    return apiOk(",\"session_id\":" + sqlInt(sessionId) + ",\"session_name\":\"Новый звонок\"");
+}
+
+function handleSessions() {
+    var rows = db(
+        "SELECT TOP 12 id, name, created_at FROM ai_practice.dialog_sessions " +
+        "WHERE user_id = " + sqlInt(getCurrentUserId()) + " AND type_id = " + TYPE_CALL + " " +
+        "ORDER BY created_at DESC"
+    );
+
+    var parts = [];
+    for (row in rows) {
+        parts.push(
+            "{\"id\":" + sqlInt(row.id) +
+            ",\"name\":" + jsonString(row.name) +
+            ",\"created_at\":" + jsonString(row.created_at) + "}"
+        );
+    }
+
+    return apiOk(",\"sessions\":[" + parts.join(",") + "]");
+}
+
+function handleSessionMessages() {
+    var sessionId = toInt(getFormValue("session_id"));
+    var session = getOwnedSession(sessionId);
+
+    if (session == undefined) {
+        return apiError("Диалог не найден");
+    }
+
+    var rows = db(
+        "SELECT m.id, r.role AS role_name, m.content " +
+        "FROM ai_practice.dialog_messages m " +
+        "INNER JOIN ai_practice.roles r ON r.id = m.role_id " +
+        "WHERE m.session_id = " + sqlInt(sessionId) + " AND m.role_id IN (" + ROLE_USER + ", " + ROLE_ASSISTANT + ") " +
+        "ORDER BY m.id ASC"
+    );
+
+    var parts = [];
+    for (row in rows) {
+        parts.push(
+            "{\"role\":" + jsonString(row.role_name) +
+            ",\"content\":" + jsonString(row.content) + "}"
+        );
+    }
+
+    return apiOk(
+        ",\"session_id\":" + sqlInt(sessionId) +
+        ",\"session_name\":" + jsonString(session.name) +
+        ",\"messages\":[" + parts.join(",") + "]"
+    );
+}
+
+function handleApi(action) {
+    try {
+        if (action == "chat") {
+            return handleChat();
+        }
+
+        if (action == "new_session") {
+            return handleNewSession();
+        }
+
+        if (action == "sessions") {
+            return handleSessions();
+        }
+
+        if (action == "session_messages") {
+            return handleSessionMessages();
+        }
+
+        return apiError("Неизвестное действие: " + action);
+    } catch (error) {
+        return apiError(String(error));
+    }
+}
+
+var apiAction = getQueryValue("action");
+var apiJson = "";
+
+if (apiAction != "") {
+    try {
+        Response.ContentType = "application/json; charset=utf-8";
+    } catch (e) {}
+
+    apiJson = handleApi(apiAction);
+%><%=apiJson%><%
+} else {
+%>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: #f4f5f9;
+            font-family: 'Roboto', Arial, sans-serif;
+            color: #1a1a2e;
+        }
+
+        .page-content {
+            width: 100%;
+        }
+
+        .page-main {
+            margin: 0 0 0 50px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .head {
+            display: flex;
+            color: white;
+            flex-direction: row;
+            margin: 25px 0 30px;
+            max-width: 1620px;
+            width: 97%;
+            background: #2c3979 url("Rectangle.png") center/cover no-repeat;
+            min-height: 300px;
+            border-radius: 10px;
+            justify-content: space-between;
+            overflow: hidden;
+        }
+
+        .head-left-block {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 40px;
+        }
+
+        .head h1 {
+            margin: 0;
+            font-size: 36px;
+            font-weight: 700;
+        }
+
+        .headButtons {
+            margin-top: 35px;
+        }
+
+        .head button {
+            width: 180px;
+            height: 48px;
+            border-radius: 10px;
+            color: #fff;
+            background-color: #2c3979;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .head button:hover {
+            background: #505c98;
+        }
+
+        .head-right-block {
+            display: flex;
+            flex-direction: row;
+        }
+
+        .headerBlocks {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            padding: 40px;
+        }
+
+        .headerBlock {
+            width: 210px;
+            min-height: 100px;
+            border-radius: 8px;
+            background-color: rgba(255, 255, 255, 0.12);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .stat {
+            font-size: 24px;
+            margin: 0;
+            padding: 16px 0 0 16px;
+            font-weight: 500;
+        }
+
+        .statDesc {
+            font-size: 15px;
+            margin: 0;
+            font-weight: 300;
+            padding: 0 16px 16px;
+            line-height: 1.35;
+        }
+
+        .app-container {
+            max-width: 1620px;
+            width: 97%;
+            height: 800px;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 0 7px 2px rgba(34, 60, 80, 0.04);
+            display: flex;
+            overflow: hidden;
+            margin-bottom: 25px;
+        }
+
+        .sidebar {
+            width: 328px;
+            min-width: 260px;
+            background: #fafafa;
+            border-right: 2px solid #e7e7e7;
+            display: flex;
+            flex-direction: column;
+            padding: 25px 0 0 25px;
+        }
+
+        .sidebar-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1a1a2e;
+            padding: 0 18px 25px 0;
+            border-bottom: 2px solid #e7e7e7;
+            margin-bottom: 25px;
+        }
+
+        .btn-new-call,
+        .btn-history {
+            background-color: transparent;
+            color: #333;
+            border: 1px solid #ccc;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            margin-bottom: 10px;
+            transition: background 0.2s, color 0.2s;
+            align-self: flex-start;
+        }
+
+        .btn-history {
+            margin-bottom: 25px;
+        }
+
+        .btn-new-call:hover,
+        .btn-history:hover {
+            background: #2d3a6e;
+            color: #fff;
+        }
+
+        .recent-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 20px;
+            color: #1a1a2e;
+            margin-bottom: 10px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .recent-label .arrow {
+            display: inline-block;
+            font-size: 12px;
+            transition: transform 0.2s;
+        }
+
+        .recent-label.is-collapsed .arrow {
+            transform: rotate(-180deg);
+        }
+
+        .recent-list {
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            margin: 0;
+            padding: 0;
+        }
+
+        .recent-list.is-hidden {
+            display: none;
+        }
+
+        .recent-list li {
+            padding: 10px;
+            border-radius: 4px 0 0 4px;
+            font-size: 14px;
+            color: #444;
+            cursor: pointer;
+            transition: background 0.15s;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .recent-list li:hover,
+        .recent-list li.active {
+            background: #eeeff5;
+        }
+
+        .recent-list li.active {
+            font-weight: 700;
+        }
+
+        .chat-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            min-width: 0;
+        }
+
+        .chat-header {
+            text-align: right;
+            border-bottom: 2px solid #e7e7e7;
+            min-height: 79px;
+        }
+
+        .chat-header .status {
+            font-size: 20px;
+            color: #888;
+            font-style: italic;
+            font-weight: 400;
+            margin: 0;
+            padding: 25px 150px 25px 25px;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 32px 150px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            justify-content: flex-end;
+        }
+
+        .message {
+            max-width: 600px;
+            padding: 12px 16px;
+            font-size: 20px;
+            line-height: 1.5;
+            color: #1a1a1a;
+            overflow-wrap: anywhere;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: #e7e7e7;
+            border-radius: 16px 16px 4px 16px;
+        }
+
+        .message.ai {
+            align-self: flex-start;
+            background: transparent;
+            border-radius: 4px 16px 16px 16px;
+        }
+
+        .message.error {
+            align-self: flex-start;
+            background: #fff4f2;
+            color: #a83f39;
+            border: 1px solid #efc6c0;
+            border-radius: 16px;
+        }
+
+        .empty {
+            color: #888;
+            font-size: 20px;
+            font-style: italic;
+            text-align: center;
+            margin: auto;
+            line-height: 1.45;
+            max-width: 760px;
+        }
+
+        .chat-footer {
+            padding: 0 150px;
+            min-height: 120px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 25px;
+        }
+
+        .chat-footer .hint {
+            font-size: 20px;
+            color: #888;
+            font-style: italic;
+            text-align: right;
+        }
+
+        .mic-btn {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: #2d3a6e;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s, transform 0.15s;
+            flex-shrink: 0;
+        }
+
+        .mic-btn img {
+            width: 24px;
+            height: 24px;
+        }
+
+        .mic-btn:hover {
+            background: #1e2a5a;
+            transform: scale(1.12);
+        }
+
+        .mic-btn.is-listening {
+            background: #9f2d42;
+        }
+
+        button:disabled {
+            cursor: wait;
+            opacity: 0.65;
+        }
+
+        @media (max-width: 980px) {
+            .page-main {
+                margin-left: 0;
+            }
+
+            .head {
+                flex-direction: column;
+            }
+
+            .headerBlocks {
+                flex-direction: row;
+                padding-top: 0;
+            }
+
+            .app-container {
+                height: auto;
+                min-height: 760px;
+            }
+
+            .sidebar {
+                width: 260px;
+            }
+
+            .chat-header .status,
+            .chat-messages,
+            .chat-footer {
+                padding-left: 32px;
+                padding-right: 32px;
+            }
+        }
+    </style>
+
+    <div class="page-content">
+        <div class="page-main">
+            <section class="head">
+                <div class="head-left-block">
+                    <h1>ИИ-тренажер звонка</h1>
+                    <div class="headButtons">
+                        <button id="btnBlue1" type="button">Начать тренировку</button>
+                    </div>
+                </div>
+
+                <div class="head-right-block">
+                    <div class="headerBlocks">
+                        <div class="headerBlock">
+                            <p class="stat">267</p>
+                            <p class="statDesc">тренировок звонков<br>проведено</p>
+                        </div>
+                        <div class="headerBlock">
+                            <p class="stat">12 879</p>
+                            <p class="statDesc">пользователей<br>ежедневно тренируются</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <div class="app-container">
+                <aside class="sidebar">
+                    <div class="sidebar-title">ИИ-тренажер звонков</div>
+
+                    <button class="btn-new-call" id="reset" type="button">Новый звонок</button>
+                    <button class="btn-history" type="button">История звонков</button>
+
+                    <div class="recent-label" id="recentToggle" role="button" tabindex="0">
+                        <span>Недавнее</span>
+                        <span class="arrow">▼</span>
+                    </div>
+
+                    <ul class="recent-list" id="recentList">
+                        <li>Пока нет сохраненных звонков</li>
+                    </ul>
+                </aside>
+
+                <main class="chat-area">
+                    <div class="chat-header">
+                        <p class="status" id="status"></p>
+                    </div>
+
+                    <div class="chat-messages" id="chatMessages">
+                        <div class="empty" id="empty">
+                            Привет! Я ИИ-тренажер для отработки звонка продавцу квартиры. В этом сценарии ты — риелтор, а я — собственник, которому ты звонишь по поводу продажи объекта. Нажми на кнопку микрофона, чтобы начать разговор.
+                        </div>
+                    </div>
+
+                    <div class="chat-footer">
+                        <span class="hint" id="voiceHint">Нажми на кнопку микрофона, чтобы начать разговор</span>
+                        <button class="mic-btn" id="micBtn" title="Начать разговор" type="button">
+                            <img src="mic.png" alt="Микрофон">
+                        </button>
+                    </div>
+                </main>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const appContainer = document.querySelector(".app-container");
+        const startButton = document.querySelector("#btnBlue1");
+        const chat = document.querySelector("#chatMessages");
+        const voiceButton = document.querySelector("#micBtn");
+        const voiceHint = document.querySelector("#voiceHint");
+        const resetButton = document.querySelector("#reset");
+        const recentToggle = document.querySelector("#recentToggle");
+        const recentList = document.querySelector("#recentList");
+        const status = document.querySelector("#status");
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const canSpeak = "speechSynthesis" in window;
+        const canRecognizeSpeech = Boolean(SpeechRecognition);
+        const RECENT_COLLAPSED_KEY = "ai-practice-recent-collapsed";
+
+        let recognition = null;
+        let isListening = false;
+        let currentCall = createEmptyCall();
+
+        function createEmptyCall() {
+            return {
+                id: "",
+                title: "Новый звонок",
+                messages: [],
+            };
+        }
+
+        function apiUrl(action) {
+            const url = new URL(window.location.href);
+            url.searchParams.set("action", action);
+            return url.toString();
+        }
+
+        async function apiRequest(action, payload = {}) {
+            const response = await fetch(apiUrl(action), {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                },
+                body: new URLSearchParams(payload),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok || !data.ok) {
+                throw new Error(data.error || "Не получилось выполнить запрос");
+            }
+
+            return data;
+        }
+
+        async function ensureCurrentSession() {
+            if (currentCall.id) {
+                return currentCall.id;
+            }
+
+            const data = await apiRequest("new_session");
+            currentCall.id = String(data.session_id);
+            currentCall.title = data.session_name;
+            await loadRecentCalls();
+            return currentCall.id;
+        }
+
+        function isRecentCollapsed() {
+            return localStorage.getItem(RECENT_COLLAPSED_KEY) === "true";
+        }
+
+        function setRecentCollapsed(isCollapsed) {
+            localStorage.setItem(RECENT_COLLAPSED_KEY, String(isCollapsed));
+            recentToggle.classList.toggle("is-collapsed", isCollapsed);
+            recentList.classList.toggle("is-hidden", isCollapsed);
+        }
+
+        async function loadRecentCalls() {
+            try {
+                const data = await apiRequest("sessions");
+                renderRecentCalls(data.sessions || []);
+            } catch (error) {
+                recentList.replaceChildren();
+                const item = document.createElement("li");
+                item.textContent = "Не удалось загрузить историю";
+                item.title = error.message;
+                recentList.append(item);
+            }
+        }
+
+        function renderRecentCalls(calls) {
+            recentList.replaceChildren();
+
+            if (!calls.length) {
+                const emptyItem = document.createElement("li");
+                emptyItem.textContent = "Пока нет сохраненных звонков";
+                recentList.append(emptyItem);
+                return;
+            }
+
+            for (const call of calls) {
+                const item = document.createElement("li");
+                item.textContent = call.name;
+                item.title = call.name;
+
+                if (String(call.id) === String(currentCall.id)) {
+                    item.classList.add("active");
+                }
+
+                item.addEventListener("click", () => loadCall(call.id));
+                recentList.append(item);
+            }
+        }
+
+        async function loadCall(callId) {
+            const data = await apiRequest("session_messages", {
+                session_id: callId,
+            });
+
+            currentCall = {
+                id: String(data.session_id),
+                title: data.session_name,
+                messages: data.messages || [],
+            };
+
+            renderMessages(currentCall.messages);
+            await loadRecentCalls();
+            status.textContent = "";
+            appContainer.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+
+        function renderMessages(messages) {
+            chat.replaceChildren();
+
+            if (!messages.length) {
+                showEmptyState();
+                return;
+            }
+
+            for (const message of messages) {
+                addMessage(message.content, roleToClassName(message.role), false);
+            }
+        }
+
+        function roleToClassName(role) {
+            return role === "assistant" ? "ai" : role;
+        }
+
+        function classNameToRole(className) {
+            return className === "ai" ? "assistant" : className;
+        }
+
+        function showEmptyState() {
+            chat.replaceChildren();
+
+            const emptyMessage = document.createElement("div");
+            emptyMessage.className = "empty";
+            emptyMessage.id = "empty";
+            emptyMessage.textContent = "Привет! Я ИИ-тренажер для отработки звонка продавцу квартиры. В этом сценарии ты — риелтор, а я — собственник, которому ты звонишь по поводу продажи объекта. Нажми на кнопку микрофона, чтобы начать разговор.";
+            chat.append(emptyMessage);
+        }
+
+        function addMessage(text, type, shouldStore = true) {
+            document.querySelector("#empty")?.remove();
+
+            const message = document.createElement("div");
+            message.className = `message ${type}`;
+            message.textContent = text;
+            chat.append(message);
+            chat.scrollTop = chat.scrollHeight;
+
+            if (shouldStore && (type === "user" || type === "ai")) {
+                currentCall.messages.push({
+                    role: classNameToRole(type),
+                    content: text,
+                });
+            }
+        }
+
+        function setBusy(isBusy) {
+            voiceButton.disabled = isBusy || !canRecognizeSpeech;
+            resetButton.disabled = isBusy;
+        }
+
+        function setVoiceHint(text = "Нажми на кнопку микрофона, чтобы ответить") {
+            voiceHint.textContent = text;
+        }
+
+        function stopSpeaking() {
+            if (canSpeak) {
+                window.speechSynthesis.cancel();
+            }
+        }
+
+        function speakWithBrowser(text) {
+            return new Promise((resolve) => {
+                if (!canSpeak) {
+                    resolve();
+                    return;
+                }
+
+                const phrase = new SpeechSynthesisUtterance(text);
+                phrase.lang = "ru-RU";
+                phrase.rate = 1;
+                phrase.pitch = 1;
+                phrase.onend = resolve;
+                phrase.onerror = resolve;
+
+                window.speechSynthesis.speak(phrase);
+            });
+        }
+
+        async function speak(text) {
+            stopSpeaking();
+            status.textContent = "";
+            setVoiceHint("");
+            await speakWithBrowser(text);
+        }
+
+        async function sendPrompt(prompt) {
+            if (!prompt) {
+                return;
+            }
+
+            setBusy(true);
+            addMessage(prompt, "user");
+            status.textContent = "Нейросеть отвечает...";
+            setVoiceHint("");
+
+            try {
+                const sessionId = await ensureCurrentSession();
+                const data = await apiRequest("chat", {
+                    session_id: sessionId,
+                    prompt,
+                });
+
+                currentCall.id = String(data.session_id);
+                currentCall.title = data.session_name;
+
+                addMessage(data.answer, "ai");
+                await loadRecentCalls();
+                await speak(data.answer);
+            } catch (error) {
+                addMessage(error.message, "error", false);
+                status.textContent = "Ошибка запроса";
+            } finally {
+                setBusy(false);
+                setVoiceHint();
+            }
+        }
+
+        async function startNewCall() {
+            setBusy(true);
+            status.textContent = "Создаю новый звонок...";
+
+            if (isListening && recognition) {
+                recognition.stop();
+            }
+
+            stopSpeaking();
+
+            const data = await apiRequest("new_session");
+            currentCall = {
+                id: String(data.session_id),
+                title: data.session_name,
+                messages: [],
+            };
+
+            showEmptyState();
+            await loadRecentCalls();
+            status.textContent = "";
+            setVoiceHint("Нажми на кнопку микрофона, чтобы начать разговор");
+        }
+
+        startButton.addEventListener("click", () => {
+            appContainer.scrollIntoView({ behavior: "smooth", block: "start" });
+            status.textContent = "Нажмите микрофон, чтобы начать тренировку";
+        });
+
+        resetButton.addEventListener("click", async () => {
+            try {
+                await startNewCall();
+            } catch (error) {
+                addMessage(error.message, "error", false);
+                status.textContent = "Ошибка создания звонка";
+            } finally {
+                setBusy(false);
+            }
+        });
+
+        if (canRecognizeSpeech) {
+            recognition = new SpeechRecognition();
+            recognition.lang = "ru-RU";
+            recognition.interimResults = false;
+            recognition.continuous = false;
+
+            recognition.addEventListener("start", () => {
+                isListening = true;
+                voiceButton.classList.add("is-listening");
+                setVoiceHint("Слушаю ваш прекрасный голос...");
+            });
+
+            recognition.addEventListener("result", async (event) => {
+                const transcript = event.results[0][0].transcript.trim();
+                await sendPrompt(transcript);
+            });
+
+            recognition.addEventListener("end", () => {
+                isListening = false;
+                voiceButton.classList.remove("is-listening");
+            });
+
+            recognition.addEventListener("error", (event) => {
+                isListening = false;
+                voiceButton.classList.remove("is-listening");
+                setVoiceHint();
+                addMessage(`Ошибка распознавания речи: ${event.error}`, "error", false);
+                status.textContent = "Ошибка микрофона";
+            });
+        } else {
+            voiceButton.disabled = true;
+            voiceButton.title = "Этот браузер не поддерживает распознавание речи";
+            setVoiceHint("Этот браузер не поддерживает распознавание речи");
+        }
+
+        voiceButton.addEventListener("click", () => {
+            if (!recognition) {
+                addMessage("Этот браузер не поддерживает распознавание речи.", "error", false);
+                return;
+            }
+
+            if (isListening) {
+                recognition.stop();
+                return;
+            }
+
+            recognition.start();
+        });
+
+        recentToggle.addEventListener("click", () => {
+            setRecentCollapsed(!isRecentCollapsed());
+        });
+
+        recentToggle.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                setRecentCollapsed(!isRecentCollapsed());
+            }
+        });
+
+        setRecentCollapsed(isRecentCollapsed());
+        loadRecentCalls();
+    </script>
+<%
+}
+%>
