@@ -88,7 +88,7 @@ def generate_response(text: str):
     dialog_history.append({"role": "user", "content": text})
 
     response = client.responses.create(
-        model="nvidia/nemotron-3-super-120b-a12b:free",
+        model="tencent/hy3:free",
         # Отправляем не только последний промпт, а всю историю диалога.
         # Благодаря этому модель видит предыдущие вопросы и свои ответы.
         input=dialog_history,
