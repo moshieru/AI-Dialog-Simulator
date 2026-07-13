@@ -1,67 +1,25 @@
-<%
-// =========================
-// SERVER-SIDE JS ДЛЯ WEBTUTOR
-// =========================
-// Этот блок работает на сервере WT. Он:
-// 1. принимает ajax-запросы со страницы;
-// 2. пишет сессии и сообщения в БД;
-// 3. вызывает OpenRouter;
-// 4. возвращает браузеру JSON.
-
-var OPENROUTER_API_KEY = "api"; // Вставить ключ только на сервере, не в браузерный JS.
-var OPENROUTER_MODEL = "tencent/hy3:free";
-
-var ROLE_SYSTEM = 1;
+﻿<%
 var ROLE_USER = 2;
 var ROLE_ASSISTANT = 3;
 var TYPE_CALL = 1;
-var MAX_HISTORY_MESSAGES = 8; // Берем только последние реплики, чтобы не упереться в лимит токенов модели.
 
-var SYSTEM_PROMPT = "Ты — ИИ-тренажер и играешь роль продавца квартиры. Пользователь — риелтор, который звонит тебе по поводу продажи. Веди себя как реальный собственник: в начале осторожно и немного недоверчиво, но без грубости. Квартира: 2-комнатная, обычное жилое состояние, продаешь сам, хочешь купить жилье побольше, цену считаешь справедливой, комиссию платить не хочешь. Не раскрывай всю информацию сразу, отвечай только на вопросы пользователя. Если риелтор вежлив, задает хорошие вопросы, не давит и объясняет пользу — постепенно становись открытее. Если спорит, давит, пугает или сразу продает услугу — сопротивляйся. Используй возражения: «Я сам продам», «Не хочу платить комиссию», «Вы будете сбивать цену», «У меня уже есть объявление», «Мне нужно подумать», «Что вы конкретно будете делать?». Отвечай коротко, живо, как в телефонном разговоре. Не подсказывай пользователю и не оценивай его во время диалога. Начни с фразы: «Алло, слушаю».";
-
-function getQueryValue(name) {
-    try {
-        return String(Request.Query.GetOptProperty(name, ""));
-    } catch (e1) {}
-
-    try {
-        return String(Request.QueryString.GetOptProperty(name, ""));
-    } catch (e2) {}
-
-    try {
-        return String(Request.QueryString.GetProperty(name));
-    } catch (e3) {}
-
-    return "";
-}
-
-function getFormValue(name) {
-    try {
-        return String(Request.Form.GetOptProperty(name, ""));
-    } catch (e1) {}
-
-    try {
-        return String(Request.Body.GetOptProperty(name, ""));
-    } catch (e2) {}
-
-    return getQueryValue(name);
-}
-
-function toInt(value) {
-    var result = parseInt(String(value), 10);
-    if (isNaN(result)) {
-        return 0;
+function safeString(value) {
+    if (value == undefined || value == null) {
+        return "";
     }
-    return result;
+    return String(value);
 }
 
-function sqlText(value) {
-    var quote = String.fromCharCode(39);
-    return "N" + quote + String(value).split(quote).join(quote + quote) + quote;
-}
-
-function sqlInt(value) {
-    return String(toInt(value));
+function sqlId(value) {
+    var text = String(value);
+    var result = "";
+    for (var i = 0; i < text.length; i++) {
+        var charCode = text.charCodeAt(i);
+        if (charCode >= 48 && charCode <= 57) {
+            result += text.charAt(i);
+        }
+    }
+    return result == "" ? "0" : result;
 }
 
 function jsonEscape(value) {
@@ -77,291 +35,62 @@ function jsonString(value) {
     return "\"" + jsonEscape(value) + "\"";
 }
 
-function firstRow(rows) {
-    if (rows == undefined || ArrayCount(rows) == 0) {
-        return undefined;
-    }
-    return ArrayOptFirstElem(rows);
-}
-
 function db(sql) {
     return XQuery("sql: " + sql);
 }
 
-function apiOk(fields) {
-    return "{\"ok\":true" + fields + "}";
-}
-
-function apiError(message) {
-    return "{\"ok\":false,\"error\":" + jsonString(message) + "}";
-}
-
 function getCurrentUserId() {
     try {
-        return Int(curUserID);
+        return sqlId(curUserID);
     } catch (e1) {}
 
     try {
-        return Int(curUser.id);
+        return sqlId(curUser.id);
     } catch (e2) {}
 
-    return 0;
+    return "0";
 }
 
-function createSession() {
+function buildInitialCallsJson() {
     var userId = getCurrentUserId();
-
-    db(
-        "INSERT INTO ai_practice.dialog_sessions (name, type_id, user_id, created_at) " +
-        "VALUES (N'Новый звонок', " + TYPE_CALL + ", " + sqlInt(userId) + ", GETDATE())"
-    );
-
-    var rows = db(
-        "SELECT TOP 1 id FROM ai_practice.dialog_sessions " +
-        "WHERE user_id = " + sqlInt(userId) + " AND type_id = " + TYPE_CALL + " " +
-        "ORDER BY id DESC"
-    );
-
-    var session = firstRow(rows);
-    var sessionId = toInt(session.id);
-
-    // Системный промпт тоже сохраняем как сообщение: так потом понятно,
-    // с какими правилами проходил конкретный звонок.
-    db(
-        "INSERT INTO ai_practice.dialog_messages (session_id, role_id, content) VALUES (" +
-        sqlInt(sessionId) + ", " + ROLE_SYSTEM + ", " + sqlText(SYSTEM_PROMPT) + ")"
-    );
-
-    return sessionId;
-}
-
-function getOwnedSession(sessionId) {
-    return firstRow(db(
-        "SELECT TOP 1 id, name FROM ai_practice.dialog_sessions " +
-        "WHERE id = " + sqlInt(sessionId) + " AND user_id = " + sqlInt(getCurrentUserId())
-    ));
-}
-
-function ensureSession(sessionId) {
-    if (sessionId > 0 && getOwnedSession(sessionId) != undefined) {
-        return sessionId;
-    }
-    return createSession();
-}
-
-function saveMessage(sessionId, roleId, content) {
-    db(
-        "INSERT INTO ai_practice.dialog_messages (session_id, role_id, content) VALUES (" +
-        sqlInt(sessionId) + ", " + sqlInt(roleId) + ", " + sqlText(content) + ")"
-    );
-}
-
-function updateSessionNameFromPrompt(sessionId, prompt) {
-    var session = getOwnedSession(sessionId);
-    if (session == undefined || String(session.name) != "Новый звонок") {
-        return;
-    }
-
-    var title = String(prompt).split("\r").join(" ").split("\n").join(" ").split("\t").join(" ");
-    while (title.indexOf("  ") >= 0) {
-        title = title.split("  ").join(" ");
-    }
-    if (title.length > 48) {
-        title = title.substring(0, 48) + "...";
-    }
-
-    db(
-        "UPDATE ai_practice.dialog_sessions SET name = " + sqlText(title) +
-        " WHERE id = " + sqlInt(sessionId) + " AND user_id = " + sqlInt(getCurrentUserId())
-    );
-}
-
-function getMessagesForModel(sessionId) {
-    var rows = db(
-        "SELECT role_name, content FROM (" +
-        "SELECT TOP " + MAX_HISTORY_MESSAGES + " m.id, r.role AS role_name, m.content " +
-        "FROM ai_practice.dialog_messages m " +
-        "INNER JOIN ai_practice.roles r ON r.id = m.role_id " +
-        "WHERE m.session_id = " + sqlInt(sessionId) + " AND m.role_id IN (" + ROLE_USER + ", " + ROLE_ASSISTANT + ") " +
-        "ORDER BY m.id DESC" +
-        ") last_messages ORDER BY id ASC"
-    );
-
-    var messages = [];
-    messages.push({ role: "system", content: SYSTEM_PROMPT });
-
-    for (row in rows) {
-        messages.push({
-            role: String(row.role_name),
-            content: String(row.content)
-        });
-    }
-
-    return messages;
-}
-
-function messagesToJson(messages) {
-    var parts = [];
-
-    for (i = 0; i < messages.length; i++) {
-        parts.push(
-            "{\"role\":" + jsonString(messages[i].role) +
-            ",\"content\":" + jsonString(messages[i].content) + "}"
-        );
-    }
-
-    return "[" + parts.join(",") + "]";
-}
-
-function parseJson(text) {
-    try {
-        return JSON.parse(text);
-    } catch (e1) {
-        return eval("(" + text + ")");
-    }
-}
-
-function requestOpenRouter(messages) {
-    if (OPENROUTER_API_KEY == "" || OPENROUTER_API_KEY == "PASTE_OPENROUTER_API_KEY_HERE") {
-        throw "OPENROUTER_API_KEY не заполнен в server-side блоке";
-    }
-
-    var body =
-        "{\"model\":" + jsonString(OPENROUTER_MODEL) +
-        ",\"messages\":" + messagesToJson(messages) +
-        ",\"temperature\":0.7" +
-        ",\"max_tokens\":260}";
-
-    var http = new ActiveXObject("MSXML2.ServerXMLHTTP.6.0");
-    http.open("POST", "https://openrouter.ai/api/v1/chat/completions", false);
-    http.setRequestHeader("Content-Type", "application/json");
-    http.setRequestHeader("Authorization", "Bearer " + OPENROUTER_API_KEY);
-    http.setRequestHeader("HTTP-Referer", "https://education.etagi.com");
-    http.setRequestHeader("X-Title", "AI Practice");
-    http.send(body);
-
-    if (http.status < 200 || http.status >= 300) {
-        throw "OpenRouter вернул ошибку " + http.status + ": " + http.responseText;
-    }
-
-    var data = parseJson(http.responseText);
-    return String(data.choices[0].message.content);
-}
-
-function handleChat() {
-    var prompt = getFormValue("prompt");
-    var sessionId = ensureSession(toInt(getFormValue("session_id")));
-
-    if (prompt == "") {
-        return apiError("Пустой текст сообщения");
-    }
-
-    saveMessage(sessionId, ROLE_USER, prompt);
-    updateSessionNameFromPrompt(sessionId, prompt);
-
-    var answer = requestOpenRouter(getMessagesForModel(sessionId));
-    saveMessage(sessionId, ROLE_ASSISTANT, answer);
-
-    var session = getOwnedSession(sessionId);
-    return apiOk(
-        ",\"session_id\":" + sqlInt(sessionId) +
-        ",\"session_name\":" + jsonString(session.name) +
-        ",\"answer\":" + jsonString(answer)
-    );
-}
-
-function handleNewSession() {
-    var sessionId = createSession();
-    return apiOk(",\"session_id\":" + sqlInt(sessionId) + ",\"session_name\":\"Новый звонок\"");
-}
-
-function handleSessions() {
-    var rows = db(
+    var sessions = db(
         "SELECT TOP 12 id, name, created_at FROM ai_practice.dialog_sessions " +
-        "WHERE user_id = " + sqlInt(getCurrentUserId()) + " AND type_id = " + TYPE_CALL + " " +
+        "WHERE user_id = " + userId + " AND type_id = " + TYPE_CALL + " " +
         "ORDER BY created_at DESC"
     );
 
-    var parts = [];
-    for (row in rows) {
-        parts.push(
-            "{\"id\":" + sqlInt(row.id) +
-            ",\"name\":" + jsonString(row.name) +
-            ",\"created_at\":" + jsonString(row.created_at) + "}"
+    var callParts = [];
+    for (session in sessions) {
+        var sessionId = sqlId(session.id);
+        var messages = db(
+            "SELECT m.id, r.role AS role_name, m.content " +
+            "FROM ai_practice.dialog_messages m " +
+            "INNER JOIN ai_practice.roles r ON r.id = m.role_id " +
+            "WHERE m.session_id = " + sessionId + " AND m.role_id IN (" + ROLE_USER + ", " + ROLE_ASSISTANT + ") " +
+            "ORDER BY m.id ASC"
+        );
+
+        var messageParts = [];
+        for (message in messages) {
+            messageParts.push(
+                "{\"role\":" + jsonString(message.role_name) +
+                ",\"content\":" + jsonString(message.content) + "}"
+            );
+        }
+
+        callParts.push(
+            "{\"id\":" + sessionId +
+            ",\"name\":" + jsonString(session.name) +
+            ",\"created_at\":" + jsonString(session.created_at) +
+            ",\"messages\":[" + messageParts.join(",") + "]}"
         );
     }
 
-    return apiOk(",\"sessions\":[" + parts.join(",") + "]");
+    return "[" + callParts.join(",") + "]";
 }
 
-function handleSessionMessages() {
-    var sessionId = toInt(getFormValue("session_id"));
-    var session = getOwnedSession(sessionId);
-
-    if (session == undefined) {
-        return apiError("Диалог не найден");
-    }
-
-    var rows = db(
-        "SELECT m.id, r.role AS role_name, m.content " +
-        "FROM ai_practice.dialog_messages m " +
-        "INNER JOIN ai_practice.roles r ON r.id = m.role_id " +
-        "WHERE m.session_id = " + sqlInt(sessionId) + " AND m.role_id IN (" + ROLE_USER + ", " + ROLE_ASSISTANT + ") " +
-        "ORDER BY m.id ASC"
-    );
-
-    var parts = [];
-    for (row in rows) {
-        parts.push(
-            "{\"role\":" + jsonString(row.role_name) +
-            ",\"content\":" + jsonString(row.content) + "}"
-        );
-    }
-
-    return apiOk(
-        ",\"session_id\":" + sqlInt(sessionId) +
-        ",\"session_name\":" + jsonString(session.name) +
-        ",\"messages\":[" + parts.join(",") + "]"
-    );
-}
-
-function handleApi(action) {
-    try {
-        if (action == "chat") {
-            return handleChat();
-        }
-
-        if (action == "new_session") {
-            return handleNewSession();
-        }
-
-        if (action == "sessions") {
-            return handleSessions();
-        }
-
-        if (action == "session_messages") {
-            return handleSessionMessages();
-        }
-
-        return apiError("Неизвестное действие: " + action);
-    } catch (error) {
-        return apiError(String(error));
-    }
-}
-
-var apiAction = getQueryValue("action");
-var apiJson = "";
-
-if (apiAction != "") {
-    try {
-        Response.ContentType = "application/json; charset=utf-8";
-    } catch (e) {}
-
-    apiJson = handleApi(apiAction);
-%><%=apiJson%><%
-} else {
-%>
-    <style>
+var INITIAL_CALLS_JSON = buildInitialCallsJson();
+%><style>
         @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
 
         * {
@@ -812,35 +541,48 @@ if (apiAction != "") {
         const canSpeak = "speechSynthesis" in window;
         const canRecognizeSpeech = Boolean(SpeechRecognition);
         const RECENT_COLLAPSED_KEY = "ai-practice-recent-collapsed";
+        const INITIAL_CALLS = <%=INITIAL_CALLS_JSON%>;
+        const AI_PRACTICE_API = {
+            newSession: "https://education.etagi.com/custom_web_template.html?custom_web_template_id=PASTE_NEW_SESSION_TEMPLATE_ID",
+            chat: "https://education.etagi.com/custom_web_template.html?custom_web_template_id=PASTE_CHAT_TEMPLATE_ID",
+        };
+        const AI_PRACTICE_API_TOKEN = "SUPER_SECRET_TOKEN";
 
         let recognition = null;
         let isListening = false;
+        let recentCalls = Array.isArray(INITIAL_CALLS) ? INITIAL_CALLS : [];
         let currentCall = createEmptyCall();
 
         function createEmptyCall() {
             return {
                 id: "",
+                name: "Новый звонок",
                 title: "Новый звонок",
                 messages: [],
             };
         }
 
-        function apiUrl(action) {
-            const url = new URL(window.location.href);
-            url.searchParams.set("action", action);
-            return url.toString();
-        }
-
-        async function apiRequest(action, payload = {}) {
-            const response = await fetch(apiUrl(action), {
+        async function apiRequest(url, payload = {}) {
+            const response = await fetch(url, {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+                    "Content-Type": "application/json;charset=utf-8",
                 },
-                body: new URLSearchParams(payload),
+                credentials: "same-origin",
+                body: JSON.stringify({
+                    ...payload,
+                    token: AI_PRACTICE_API_TOKEN,
+                }),
             });
 
-            const data = await response.json();
+            const responseText = await response.text();
+            let data;
+
+            try {
+                data = JSON.parse(responseText);
+            } catch (error) {
+                throw new Error(`Сервер вернул не JSON: ${responseText.slice(0, 120)}`);
+            }
 
             if (!response.ok || !data.ok) {
                 throw new Error(data.error || "Не получилось выполнить запрос");
@@ -854,10 +596,12 @@ if (apiAction != "") {
                 return currentCall.id;
             }
 
-            const data = await apiRequest("new_session");
+            const data = await apiRequest(AI_PRACTICE_API.newSession);
             currentCall.id = String(data.session_id);
+            currentCall.name = data.session_name;
             currentCall.title = data.session_name;
-            await loadRecentCalls();
+            recentCalls = [currentCall, ...recentCalls.filter((call) => String(call.id) !== String(currentCall.id))];
+            loadRecentCalls();
             return currentCall.id;
         }
 
@@ -871,17 +615,8 @@ if (apiAction != "") {
             recentList.classList.toggle("is-hidden", isCollapsed);
         }
 
-        async function loadRecentCalls() {
-            try {
-                const data = await apiRequest("sessions");
-                renderRecentCalls(data.sessions || []);
-            } catch (error) {
-                recentList.replaceChildren();
-                const item = document.createElement("li");
-                item.textContent = "Не удалось загрузить историю";
-                item.title = error.message;
-                recentList.append(item);
-            }
+        function loadRecentCalls() {
+            renderRecentCalls(recentCalls);
         }
 
         function renderRecentCalls(calls) {
@@ -896,8 +631,8 @@ if (apiAction != "") {
 
             for (const call of calls) {
                 const item = document.createElement("li");
-                item.textContent = call.name;
-                item.title = call.name;
+                item.textContent = call.name || call.title;
+                item.title = call.name || call.title;
 
                 if (String(call.id) === String(currentCall.id)) {
                     item.classList.add("active");
@@ -908,19 +643,17 @@ if (apiAction != "") {
             }
         }
 
-        async function loadCall(callId) {
-            const data = await apiRequest("session_messages", {
-                session_id: callId,
-            });
+        function loadCall(callId) {
+            const call = recentCalls.find((savedCall) => String(savedCall.id) === String(callId));
 
-            currentCall = {
-                id: String(data.session_id),
-                title: data.session_name,
-                messages: data.messages || [],
-            };
+            if (!call) {
+                return;
+            }
+
+            currentCall = call;
 
             renderMessages(currentCall.messages);
-            await loadRecentCalls();
+            loadRecentCalls();
             status.textContent = "";
             appContainer.scrollIntoView({ behavior: "smooth", block: "start" });
         }
@@ -1025,16 +758,18 @@ if (apiAction != "") {
 
             try {
                 const sessionId = await ensureCurrentSession();
-                const data = await apiRequest("chat", {
+                const data = await apiRequest(AI_PRACTICE_API.chat, {
                     session_id: sessionId,
                     prompt,
                 });
 
                 currentCall.id = String(data.session_id);
+                currentCall.name = data.session_name;
                 currentCall.title = data.session_name;
 
                 addMessage(data.answer, "ai");
-                await loadRecentCalls();
+                recentCalls = [currentCall, ...recentCalls.filter((call) => String(call.id) !== String(currentCall.id))];
+                loadRecentCalls();
                 await speak(data.answer);
             } catch (error) {
                 addMessage(error.message, "error", false);
@@ -1055,15 +790,17 @@ if (apiAction != "") {
 
             stopSpeaking();
 
-            const data = await apiRequest("new_session");
+            const data = await apiRequest(AI_PRACTICE_API.newSession);
             currentCall = {
                 id: String(data.session_id),
+                name: data.session_name,
                 title: data.session_name,
                 messages: [],
             };
 
             showEmptyState();
-            await loadRecentCalls();
+            recentCalls = [currentCall, ...recentCalls.filter((call) => String(call.id) !== String(currentCall.id))];
+            loadRecentCalls();
             status.textContent = "";
             setVoiceHint("Нажми на кнопку микрофона, чтобы начать разговор");
         }
@@ -1147,6 +884,4 @@ if (apiAction != "") {
         setRecentCollapsed(isRecentCollapsed());
         loadRecentCalls();
     </script>
-<%
-}
-%>
+

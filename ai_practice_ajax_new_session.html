@@ -1,0 +1,161 @@
+<%
+// AJAX-файл: создать новый звонок.
+// В WT это отдельный custom web template.
+
+var API_TOKEN = "SUPER_SECRET_TOKEN";
+var ROLE_SYSTEM = 1;
+var TYPE_CALL = 1;
+
+var SYSTEM_PROMPT = "Ты — ИИ-тренажер и играешь роль продавца квартиры. Пользователь — риелтор, который звонит тебе по поводу продажи. Веди себя как реальный собственник: в начале осторожно и немного недоверчиво, но без грубости. Квартира: 2-комнатная, обычное жилое состояние, продаешь сам, хочешь купить жилье побольше, цену считаешь справедливой, комиссию платить не хочешь. Не раскрывай всю информацию сразу, отвечай только на вопросы пользователя. Если риелтор вежлив, задает хорошие вопросы, не давит и объясняет пользу — постепенно становись открытее. Если спорит, давит, пугает или сразу продает услугу — сопротивляйся. Используй возражения: «Я сам продам», «Не хочу платить комиссию», «Вы будете сбивать цену», «У меня уже есть объявление», «Мне нужно подумать», «Что вы конкретно будете делать?». Отвечай коротко, живо, как в телефонном разговоре. Не подсказывай пользователю и не оценивай его во время диалога. Начни с фразы: «Алло, слушаю».";
+
+function safeString(value) {
+    if (value == undefined || value == null) {
+        return "";
+    }
+    return String(value);
+}
+
+function getRawBody() {
+    try {
+        return safeString(Request.Body);
+    } catch (e1) {}
+
+    try {
+        return safeString(Request.Body.Value);
+    } catch (e2) {}
+
+    try {
+        return safeString(Request.GetBody());
+    } catch (e3) {}
+
+    return "";
+}
+
+function parseJson(text) {
+    try {
+        return JSON.parse(text);
+    } catch (e1) {
+        return eval("(" + text + ")");
+    }
+}
+
+function getPayload() {
+    var body = getRawBody();
+    if (body != "") {
+        try {
+            return parseJson(body);
+        } catch (e1) {}
+    }
+    return {};
+}
+
+function payloadValue(payload, name) {
+    try {
+        return safeString(payload[name]);
+    } catch (e1) {}
+    return "";
+}
+
+function sqlId(value) {
+    var text = String(value);
+    var result = "";
+    for (var i = 0; i < text.length; i++) {
+        var charCode = text.charCodeAt(i);
+        if (charCode >= 48 && charCode <= 57) {
+            result += text.charAt(i);
+        }
+    }
+    return result == "" ? "0" : result;
+}
+
+function sqlText(value) {
+    var quote = String.fromCharCode(39);
+    return "N" + quote + String(value).split(quote).join(quote + quote) + quote;
+}
+
+function jsonEscape(value) {
+    return String(value).split("\\").join("\\\\").split("\"").join("\\\"").split("\r").join("\\r").split("\n").join("\\n").split("\t").join("\\t");
+}
+
+function jsonString(value) {
+    return "\"" + jsonEscape(value) + "\"";
+}
+
+function firstRow(rows) {
+    if (rows == undefined || ArrayCount(rows) == 0) {
+        return undefined;
+    }
+    return ArrayOptFirstElem(rows);
+}
+
+function db(sql) {
+    return XQuery("sql: " + sql);
+}
+
+function apiOk(fields) {
+    return "{\"ok\":true" + fields + "}";
+}
+
+function apiError(message) {
+    return "{\"ok\":false,\"error\":" + jsonString(message) + "}";
+}
+
+function getCurrentUserId() {
+    try {
+        return sqlId(curUserID);
+    } catch (e1) {}
+
+    try {
+        return sqlId(curUser.id);
+    } catch (e2) {}
+
+    return "0";
+}
+
+function createSession() {
+    var userId = getCurrentUserId();
+
+    db(
+        "INSERT INTO ai_practice.dialog_sessions (name, type_id, user_id, created_at) " +
+        "VALUES (N'Новый звонок', " + TYPE_CALL + ", " + userId + ", GETDATE())"
+    );
+
+    var rows = db(
+        "SELECT TOP 1 id FROM ai_practice.dialog_sessions " +
+        "WHERE user_id = " + userId + " AND type_id = " + TYPE_CALL + " " +
+        "ORDER BY id DESC"
+    );
+
+    var session = firstRow(rows);
+    if (session == undefined) {
+        throw "Сессия не создалась или SELECT не нашел ее. user_id=" + userId;
+    }
+
+    var sessionId = sqlId(session.id);
+
+    db(
+        "INSERT INTO ai_practice.dialog_messages (session_id, role_id, content) VALUES (" +
+        sessionId + ", " + ROLE_SYSTEM + ", " + sqlText(SYSTEM_PROMPT) + ")"
+    );
+
+    return sessionId;
+}
+
+function handleRequest() {
+    try {
+        var payload = getPayload();
+        if (API_TOKEN != "" && payloadValue(payload, "token") != API_TOKEN) {
+            return apiError("Неверный token");
+        }
+
+        var sessionId = createSession();
+        return apiOk(",\"session_id\":" + sessionId + ",\"session_name\":\"Новый звонок\"");
+    } catch (error) {
+        return apiError(String(error));
+    }
+}
+
+try {
+    Response.ContentType = "application/json; charset=utf-8";
+} catch (e) {}
+%><%=handleRequest()%>
