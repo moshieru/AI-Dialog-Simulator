@@ -90,6 +90,15 @@ function buildInitialCallsJson() {
 }
 
 var INITIAL_CALLS_JSON = buildInitialCallsJson();
+var CURRENT_USER_ID = "0";
+try {
+    CURRENT_USER_ID = curUserID;
+} catch (e1) {}
+try {
+    if (sqlId(CURRENT_USER_ID) == "0") {
+        CURRENT_USER_ID = curUser.id;
+    }
+} catch (e2) {}
 %><style>
         @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
 
@@ -542,9 +551,12 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
         const canRecognizeSpeech = Boolean(SpeechRecognition);
         const RECENT_COLLAPSED_KEY = "ai-practice-recent-collapsed";
         const INITIAL_CALLS = <%=INITIAL_CALLS_JSON%>;
+        const AI_PRACTICE_CUR_USER_ID = "<%=curUserID%>";
+        const AI_PRACTICE_CUR_USER_OBJECT_ID = "<%=curUser.id%>";
+        const AI_PRACTICE_USER_ID = getWtUserId();
         const AI_PRACTICE_API = {
-            newSession: "https://education.etagi.com/custom_web_template.html?custom_web_template_id=PASTE_NEW_SESSION_TEMPLATE_ID",
-            chat: "https://education.etagi.com/custom_web_template.html?custom_web_template_id=PASTE_CHAT_TEMPLATE_ID",
+            newSession: "https://education-test.etagi.com/custom_web_template.html?custom_web_template_id=7661975945771368867",
+            chat: "https://education-test.etagi.com/custom_web_template.html?custom_web_template_id=7661975584600765725",
         };
         const AI_PRACTICE_API_TOKEN = "SUPER_SECRET_TOKEN";
 
@@ -552,6 +564,26 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
         let isListening = false;
         let recentCalls = Array.isArray(INITIAL_CALLS) ? INITIAL_CALLS : [];
         let currentCall = createEmptyCall();
+
+        function onlyDigits(value) {
+            return String(value || "").replace(/\D/g, "");
+        }
+
+        function getWtUserId() {
+            const fromCurUserId = onlyDigits(AI_PRACTICE_CUR_USER_ID);
+
+            if (fromCurUserId && fromCurUserId !== "0") {
+                return fromCurUserId;
+            }
+
+            const fromCurUserObject = onlyDigits(AI_PRACTICE_CUR_USER_OBJECT_ID);
+
+            if (fromCurUserObject && fromCurUserObject !== "0") {
+                return fromCurUserObject;
+            }
+
+            return "0";
+        }
 
         function createEmptyCall() {
             return {
@@ -572,6 +604,7 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
                 body: JSON.stringify({
                     ...payload,
                     token: AI_PRACTICE_API_TOKEN,
+                    collaborator_id: AI_PRACTICE_USER_ID,
                 }),
             });
 

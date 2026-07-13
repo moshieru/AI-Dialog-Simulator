@@ -100,7 +100,14 @@ function apiError(message) {
     return "{\"ok\":false,\"error\":" + jsonString(message) + "}";
 }
 
-function getCurrentUserId() {
+function getCurrentUserId(payload) {
+    try {
+        var payloadUserId = sqlId(payloadValue(payload, "collaborator_id"));
+        if (payloadUserId != "0") {
+            return payloadUserId;
+        }
+    } catch (e0) {}
+
     try {
         return sqlId(curUserID);
     } catch (e1) {}
@@ -112,8 +119,8 @@ function getCurrentUserId() {
     return "0";
 }
 
-function createSession() {
-    var userId = getCurrentUserId();
+function createSession(payload) {
+    var userId = getCurrentUserId(payload);
 
     db(
         "INSERT INTO ai_practice.dialog_sessions (name, type_id, user_id, created_at) " +
@@ -148,7 +155,7 @@ function handleRequest() {
             return apiError("Неверный token");
         }
 
-        var sessionId = createSession();
+        var sessionId = createSession(payload);
         return apiOk(",\"session_id\":" + sessionId + ",\"session_name\":\"Новый звонок\"");
     } catch (error) {
         return apiError(String(error));
