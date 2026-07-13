@@ -228,36 +228,25 @@
             color: #fff;
         }
 
-        .voice-select-label {
-            margin-top: 18px;
-            margin-bottom: 8px;
-            color: #1a1a2e;
-            font-size: 16px;
-            font-weight: 500;
-        }
-
-        .voice-select {
-            width: 230px;
-            height: 40px;
-            border: 1px solid #CCCCCC;
-            border-radius: 10px;
-            padding: 0 10px;
-            background: #ffffff;
-            color: #333;
-            font: inherit;
-            margin-bottom: 10px;
-        }
-
         .recent-label {
+            display: flex;
+            align-items: center;
+            gap: 6px;
             font-size: 20px;
             color: #1a1a2e;
             margin-bottom: 10px;
+            cursor: pointer;
             user-select: none;
         }
 
         .recent-label .arrow {
+            display: inline-block;
             font-size: 12px;
-            margin-left: 4px;
+            transition: transform 0.2s;
+        }
+
+        .recent-label.is-collapsed .arrow {
+            transform: rotate(-180deg);
         }
 
         .recent-list {
@@ -266,6 +255,10 @@
             flex-direction: column;
             margin: 0;
             padding: 0;
+        }
+
+        .recent-list.is-hidden {
+            display: none;
         }
 
         .recent-list li {
@@ -441,17 +434,10 @@
                     <button class="btn-new-call" id="reset">Новый звонок</button>
                     <button class="btn-history">История звонков</button>
 
-                    <label class="voice-select-label" for="tts-voice">Голос</label>
-                    <select class="voice-select" id="tts-voice">
-                        <option value="ru-RU-SvetlanaNeural">Svetlana, ru-RU</option>
-                        <option value="ru-RU-DmitryNeural">Dmitry, ru-RU</option>
-                        <option value="en-US-AvaNeural">Ava, en-US</option>
-                        <option value="en-US-AndrewNeural">Andrew, en-US</option>
-                        <option value="en-GB-SoniaNeural">Sonia, en-GB</option>
-                    </select>
-                    <button class="btn-history" id="tts-test">Тест TTS</button>
-
-                    <div class="recent-label">Недавнее</div>
+                    <div class="recent-label" id="recentToggle" role="button" tabindex="0">
+                        <span>Недавнее</span>
+                        <span class="arrow">▼</span>
+                    </div>
 
                     <ul class="recent-list" id="recentList">
                         <li>Пока нет сохраненных звонков</li>
@@ -485,19 +471,18 @@
         const voiceButton = document.querySelector("#micBtn");
         const voiceHint = document.querySelector("#voiceHint");
         const resetButton = document.querySelector("#reset");
+        const recentToggle = document.querySelector("#recentToggle");
         const recentList = document.querySelector("#recentList");
         const status = document.querySelector("#status");
-        const ttsVoice = document.querySelector("#tts-voice");
-        const ttsTestButton = document.querySelector("#tts-test");
 
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         const canSpeak = "speechSynthesis" in window;
         const canRecognizeSpeech = Boolean(SpeechRecognition);
         const RECENT_CALLS_KEY = "ai-dialog-simulator-recent-calls";
+        const RECENT_COLLAPSED_KEY = "ai-dialog-simulator-recent-collapsed";
 
         let recognition = null;
         let isListening = false;
-        let currentAudio = null;
         let currentCall = createEmptyCall();
 
         function setVoiceHint(text = "Нажми на кнопку микрофона, чтобы ответить") {
@@ -523,6 +508,16 @@
 
         function saveRecentCalls(calls) {
             localStorage.setItem(RECENT_CALLS_KEY, JSON.stringify(calls.slice(0, 12)));
+        }
+
+        function isRecentCollapsed() {
+            return localStorage.getItem(RECENT_COLLAPSED_KEY) === "true";
+        }
+
+        function setRecentCollapsed(isCollapsed) {
+            localStorage.setItem(RECENT_COLLAPSED_KEY, String(isCollapsed));
+            recentToggle.classList.toggle("is-collapsed", isCollapsed);
+            recentList.classList.toggle("is-hidden", isCollapsed);
         }
 
         function createCallTitle(messages) {
@@ -583,7 +578,7 @@
             currentCall = call;
             renderMessages(call.messages);
             renderRecentCalls();
-            status.textContent = "Звонок открыт из недавних";
+            status.textContent = "";
             appContainer.scrollIntoView({ behavior: "smooth", block: "start" });
         }
 
@@ -632,25 +627,12 @@
         function setBusy(isBusy) {
             voiceButton.disabled = isBusy || !canRecognizeSpeech;
             resetButton.disabled = isBusy;
-            ttsTestButton.disabled = isBusy;
         }
 
         function stopSpeaking() {
-            if (currentAudio) {
-                currentAudio.pause();
-                currentAudio.currentTime = 0;
-            }
-
             if (canSpeak) {
                 window.speechSynthesis.cancel();
             }
-        }
-
-        function waitForAudioEnd(audio) {
-            return new Promise((resolve) => {
-                audio.addEventListener("ended", resolve, { once: true });
-                audio.addEventListener("error", resolve, { once: true });
-            });
         }
 
         function speakWithBrowser(text) {
@@ -675,35 +657,7 @@
             stopSpeaking();
             status.textContent = "";
             setVoiceHint("");
-
-            try {
-                const response = await fetch("/api/tts", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json",
-                    },
-                    body: JSON.stringify({
-                        text,
-                        voice: ttsVoice.value,
-                        speed: 1.0,
-                    }),
-                });
-
-                if (!response.ok) {
-                    const data = await response.json();
-                    throw new Error(data.error || "Не получилось озвучить ответ");
-                }
-
-                const audioBlob = await response.blob();
-                const audioUrl = URL.createObjectURL(audioBlob);
-                currentAudio = new Audio(audioUrl);
-                await currentAudio.play();
-                await waitForAudioEnd(currentAudio);
-            } catch (error) {
-                console.warn("Edge TTS не сработал, использую голос браузера:", error);
-                addMessage(`TTS недоступен: ${error.message}`, "error", false);
-                await speakWithBrowser(text);
-            }
+            await speakWithBrowser(text);
         }
 
         async function sendPrompt(prompt) {
@@ -783,17 +737,6 @@
             }
         });
 
-        ttsTestButton.addEventListener("click", async () => {
-            setBusy(true);
-
-            try {
-                await speak("Проверка голоса. Если вы слышите эту фразу, локальный Edge TTS работает.");
-            } finally {
-                setBusy(false);
-                setVoiceHint();
-            }
-        });
-
         if (canRecognizeSpeech) {
             recognition = new SpeechRecognition();
             recognition.lang = "ru-RU";
@@ -842,6 +785,18 @@
             recognition.start();
         });
 
+        recentToggle.addEventListener("click", () => {
+            setRecentCollapsed(!isRecentCollapsed());
+        });
+
+        recentToggle.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                setRecentCollapsed(!isRecentCollapsed());
+            }
+        });
+
+        setRecentCollapsed(isRecentCollapsed());
         renderRecentCalls();
     </script>
 </body>

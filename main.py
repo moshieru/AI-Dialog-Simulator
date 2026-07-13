@@ -1,7 +1,5 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 import json
 import os
 import traceback
@@ -63,8 +61,6 @@ def get_required_env(name):
 load_dotenv()
 CONFIG = load_config()
 SYSTEM_MESSAGE = {"role": "system", "content": CONFIG["system_prompt"]}
-EDGE_TTS_BASE_URL = os.environ.get("EDGE_TTS_BASE_URL", "http://127.0.0.1:5050").rstrip("/")
-EDGE_TTS_API_KEY = os.environ.get("EDGE_TTS_API_KEY", "your_api_key_here")
 
 # Здесь хранится история текущего диалога.
 # Важно: модель не помнит прошлые запросы сама, поэтому мы каждый раз
@@ -107,43 +103,6 @@ def generate_response(text: str):
     return answer
 
 
-def generate_speech(text: str, voice="ru-RU-SvetlanaNeural", speed=1.0):
-    # openai-edge-tts поднимается отдельным локальным сервером.
-    # Наш backend обращается к его OpenAI-совместимому endpoint /v1/audio/speech.
-    payload = {
-        "model": "tts-1",
-        "input": text[:4096],
-        "voice": voice,
-        "response_format": "mp3",
-        "speed": speed,
-    }
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json",
-    }
-
-    if EDGE_TTS_API_KEY:
-        headers["Authorization"] = f"Bearer {EDGE_TTS_API_KEY}"
-
-    request = Request(
-        f"{EDGE_TTS_BASE_URL}/v1/audio/speech",
-        data=body,
-        headers=headers,
-        method="POST",
-    )
-
-    try:
-        with urlopen(request, timeout=30) as response:
-            return response.read()
-    except HTTPError as error:
-        error_text = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"TTS-сервер вернул {error.code}: {error_text}") from error
-    except URLError as error:
-        raise RuntimeError(
-            "TTS-сервер недоступен. Запустите openai-edge-tts на http://127.0.0.1:5050"
-        ) from error
-
-
 class DialogHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         # Браузер сам просит favicon.ico для иконки вкладки.
@@ -177,11 +136,6 @@ class DialogHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True})
             return
 
-        # API-адрес для озвучки ответа через локальный openai-edge-tts.
-        if self.path == "/api/tts":
-            self.handle_tts_request()
-            return
-
         self.send_json({"error": "Маршрут не найден"}, status=404)
 
     def handle_chat_request(self):
@@ -202,24 +156,6 @@ class DialogHandler(BaseHTTPRequestHandler):
             traceback.print_exc()
             self.send_json({"error": str(error)}, status=500)
 
-    def handle_tts_request(self):
-        try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            raw_body = self.rfile.read(content_length)
-            data = json.loads(raw_body.decode("utf-8"))
-            text = data.get("text", "").strip()
-            voice = data.get("voice", "ru-RU-SvetlanaNeural").strip()
-            speed = float(data.get("speed", 1.0))
-
-            if not text:
-                self.send_json({"error": "Текст для озвучки пустой"}, status=400)
-                return
-
-            audio = generate_speech(text, voice=voice, speed=speed)
-            self.send_binary(audio, content_type="audio/mpeg")
-        except Exception as error:
-            self.send_json({"error": str(error)}, status=500)
-
     def send_html(self, file_path):
         # Читаем index.html с диска и отправляем его браузеру как HTML-страницу.
         page = file_path.read_text(encoding="utf-8").encode("utf-8")
@@ -229,13 +165,6 @@ class DialogHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(page)))
         self.end_headers()
         self.wfile.write(page)
-
-    def send_binary(self, data, content_type):
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
 
     def send_json(self, data, status=200):
         # Универсальный метод для JSON-ответов API.
