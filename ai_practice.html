@@ -2,6 +2,7 @@
 var ROLE_USER = 2;
 var ROLE_ASSISTANT = 3;
 var TYPE_CALL = 1;
+var CURRENT_USER_ID = curUserID;
 
 function safeString(value) {
     if (value == undefined || value == null) {
@@ -13,13 +14,20 @@ function safeString(value) {
 function sqlId(value) {
     var text = String(value);
     var result = "";
-    for (var i = 0; i < text.length; i++) {
-        var charCode = text.charCodeAt(i);
-        if (charCode >= 48 && charCode <= 57) {
+    var i;
+    var code;
+    for (i = 0; i < text.length; i++) {
+        code = text.charCodeAt(i);
+        if (code >= 48 && code <= 57) {
             result += text.charAt(i);
         }
     }
     return result == "" ? "0" : result;
+}
+
+function sqlText(value) {
+    var quote = String.fromCharCode(39);
+    return quote + String(value).split(quote).join(quote + quote) + quote;
 }
 
 function jsonEscape(value) {
@@ -40,23 +48,15 @@ function db(sql) {
 }
 
 function getCurrentUserId() {
-    try {
-        return sqlId(curUserID);
-    } catch (e1) {}
-
-    try {
-        return sqlId(curUser.id);
-    } catch (e2) {}
-
-    return "0";
+    return CURRENT_USER_ID;
 }
 
 function buildInitialCallsJson() {
     var userId = getCurrentUserId();
     var sessions = db(
-        "SELECT TOP 12 id, name, created_at FROM ai_practice.dialog_sessions " +
-        "WHERE user_id = " + userId + " AND type_id = " + TYPE_CALL + " " +
-        "ORDER BY created_at DESC"
+        "SELECT id, name, created_at FROM ai_practice.dialog_sessions " +
+        "WHERE user_id = " + sqlId(userId) + " AND type_id = " + TYPE_CALL + " " +
+        "ORDER BY created_at DESC LIMIT 12"
     );
 
     var callParts = [];
@@ -90,15 +90,6 @@ function buildInitialCallsJson() {
 }
 
 var INITIAL_CALLS_JSON = buildInitialCallsJson();
-var CURRENT_USER_ID = "0";
-try {
-    CURRENT_USER_ID = curUserID;
-} catch (e1) {}
-try {
-    if (sqlId(CURRENT_USER_ID) == "0") {
-        CURRENT_USER_ID = curUser.id;
-    }
-} catch (e2) {}
 %><style>
         @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
 
@@ -551,12 +542,13 @@ try {
         const canRecognizeSpeech = Boolean(SpeechRecognition);
         const RECENT_COLLAPSED_KEY = "ai-practice-recent-collapsed";
         const INITIAL_CALLS = <%=INITIAL_CALLS_JSON%>;
-        const AI_PRACTICE_CUR_USER_ID = "<%=curUserID%>";
-        const AI_PRACTICE_CUR_USER_OBJECT_ID = "<%=curUser.id%>";
-        const AI_PRACTICE_USER_ID = getWtUserId();
+        const AI_PRACTICE_USER_ID = "<%=curUserID%>";
+        // Для WT на https замени localhost на публичный HTTPS-адрес proxy.
+        const AI_PRACTICE_PROXY_URL = "http://localhost:8787";
         const AI_PRACTICE_API = {
-            newSession: "https://education-test.etagi.com/custom_web_template.html?custom_web_template_id=7661975945771368867",
-            chat: "https://education-test.etagi.com/custom_web_template.html?custom_web_template_id=7661975584600765725",
+            newSession: "https://education-test.etagi.com/custom_web_template.html?custom_web_template_id=7662327141306009678",
+            chat: `${AI_PRACTICE_PROXY_URL}/chat`,
+            saveMessages: "https://education-test.etagi.com/custom_web_template.html?custom_web_template_id=7662327403158627238",
         };
         const AI_PRACTICE_API_TOKEN = "SUPER_SECRET_TOKEN";
 
@@ -564,26 +556,6 @@ try {
         let isListening = false;
         let recentCalls = Array.isArray(INITIAL_CALLS) ? INITIAL_CALLS : [];
         let currentCall = createEmptyCall();
-
-        function onlyDigits(value) {
-            return String(value || "").replace(/\D/g, "");
-        }
-
-        function getWtUserId() {
-            const fromCurUserId = onlyDigits(AI_PRACTICE_CUR_USER_ID);
-
-            if (fromCurUserId && fromCurUserId !== "0") {
-                return fromCurUserId;
-            }
-
-            const fromCurUserObject = onlyDigits(AI_PRACTICE_CUR_USER_OBJECT_ID);
-
-            if (fromCurUserObject && fromCurUserObject !== "0") {
-                return fromCurUserObject;
-            }
-
-            return "0";
-        }
 
         function createEmptyCall() {
             return {
@@ -594,18 +566,62 @@ try {
             };
         }
 
-        async function apiRequest(url, payload = {}) {
+        async function apiRequest(url, payload = {}, method = "POST") {
+            const requestPayload = {
+                ...payload,
+                token: AI_PRACTICE_API_TOKEN,
+                collaborator_id: AI_PRACTICE_USER_ID,
+            };
+
+            const requestOptions = {
+                method,
+                credentials: "same-origin",
+            };
+
+            let requestUrl = url;
+
+            if (method === "GET") {
+                const params = new URLSearchParams(requestPayload);
+                requestUrl = `${url}&${params.toString()}`;
+            } else {
+                requestOptions.headers = {
+                    "Content-Type": "application/json;charset=utf-8",
+                };
+                requestOptions.body = JSON.stringify(requestPayload);
+            }
+
+            const response = await fetch(requestUrl, requestOptions);
+
+            const responseText = await response.text();
+            let data;
+
+            try {
+                data = JSON.parse(responseText);
+            } catch (error) {
+                throw new Error(`Сервер вернул не JSON: ${responseText.slice(0, 120)}`);
+            }
+
+            if (!response.ok || !data.ok) {
+                throw new Error(data.error || "Не получилось выполнить запрос");
+            }
+
+            return data;
+        }
+
+        async function formRequest(url, payload = {}) {
+            const requestPayload = new URLSearchParams({
+                ...payload,
+                token: AI_PRACTICE_API_TOKEN,
+                collaborator_id: AI_PRACTICE_USER_ID,
+            });
+
             const response = await fetch(url, {
                 method: "POST",
                 headers: {
-                    "Content-Type": "application/json;charset=utf-8",
+                    "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
                 },
                 credentials: "same-origin",
-                body: JSON.stringify({
-                    ...payload,
-                    token: AI_PRACTICE_API_TOKEN,
-                    collaborator_id: AI_PRACTICE_USER_ID,
-                }),
+                body: requestPayload.toString(),
             });
 
             const responseText = await response.text();
@@ -624,12 +640,25 @@ try {
             return data;
         }
 
+        async function saveMessagesToDatabase(sessionId, userMessage, assistantMessage) {
+            try {
+                const data = await formRequest(AI_PRACTICE_API.saveMessages, {
+                    session_id: sessionId,
+                    user_message: userMessage,
+                    assistant_message: assistantMessage,
+                });
+                console.info("Звонок сохранен в WT:", data);
+            } catch (error) {
+                console.warn("Не получилось сохранить звонок в WT:", error);
+            }
+        }
+
         async function ensureCurrentSession() {
             if (currentCall.id) {
                 return currentCall.id;
             }
 
-            const data = await apiRequest(AI_PRACTICE_API.newSession);
+            const data = await formRequest(AI_PRACTICE_API.newSession);
             currentCall.id = String(data.session_id);
             currentCall.name = data.session_name;
             currentCall.title = data.session_name;
@@ -801,6 +830,12 @@ try {
                 currentCall.title = data.session_name;
 
                 addMessage(data.answer, "ai");
+                if (data.saved_to_db) {
+                    console.info("Звонок сохранен в БД через proxy");
+                } else if (data.db_error) {
+                    console.warn("Не получилось сохранить звонок в БД через proxy:", data.db_error);
+                }
+                await saveMessagesToDatabase(currentCall.id, prompt, data.answer);
                 recentCalls = [currentCall, ...recentCalls.filter((call) => String(call.id) !== String(currentCall.id))];
                 loadRecentCalls();
                 await speak(data.answer);
@@ -823,7 +858,7 @@ try {
 
             stopSpeaking();
 
-            const data = await apiRequest(AI_PRACTICE_API.newSession);
+            const data = await formRequest(AI_PRACTICE_API.newSession);
             currentCall = {
                 id: String(data.session_id),
                 name: data.session_name,
