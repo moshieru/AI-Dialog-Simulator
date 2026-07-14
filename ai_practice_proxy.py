@@ -7,11 +7,6 @@ import os
 import time
 import random
 
-try:
-    import psycopg
-except ImportError:
-    psycopg = None
-
 
 BASE_DIR = Path(__file__).resolve().parent
 ENV_PATH = BASE_DIR / ".env"
@@ -50,10 +45,6 @@ OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "tencent/hy3:free")
 PROXY_TOKEN = os.environ.get("PROXY_TOKEN", "SUPER_SECRET_TOKEN")
 ALLOWED_ORIGIN = os.environ.get("ALLOWED_ORIGIN", "*")
 MAX_HISTORY_MESSAGES = int(os.environ.get("MAX_HISTORY_MESSAGES", "10"))
-DB_DSN = os.environ.get("DB_DSN", "").strip()
-TYPE_CALL = 1
-ROLE_USER = 2
-ROLE_ASSISTANT = 3
 
 
 def get_openrouter_api_key():
@@ -92,55 +83,6 @@ def get_or_create_session(session_id, collaborator_id=""):
 def make_session_name(prompt):
     title = " ".join(str(prompt or "").split())
     return title[:48] + "..." if len(title) > 48 else title or "Новый звонок"
-
-
-def save_dialog_to_database(session, user_message, assistant_message):
-    if not DB_DSN:
-        return False, "DB_DSN не задан в .env"
-
-    if psycopg is None:
-        return False, "Не установлен пакет psycopg. Установи: .\\.venv\\Scripts\\python.exe -m pip install \"psycopg[binary]\""
-
-    session_id = int(only_digits(session["id"]) or "0")
-    collaborator_id = int(only_digits(session.get("collaborator_id", "")) or "0")
-
-    if not session_id or not collaborator_id:
-        return False, "Некорректный session_id или collaborator_id"
-
-    try:
-        with psycopg.connect(DB_DSN) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO ai_practice.dialog_sessions (id, name, type_id, user_id, created_at)
-                    VALUES (%s, %s, %s, %s, CURRENT_DATE)
-                    ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name
-                    """,
-                    (session_id, session["name"], TYPE_CALL, collaborator_id),
-                )
-                cursor.execute(
-                    """
-                    INSERT INTO ai_practice.dialog_messages (id, session_id, role_id, content)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (int(make_session_id()), session_id, ROLE_USER, user_message),
-                )
-                cursor.execute(
-                    """
-                    INSERT INTO ai_practice.dialog_messages (id, session_id, role_id, content)
-                    VALUES (%s, %s, %s, %s)
-                    """,
-                    (int(make_session_id()), session_id, ROLE_ASSISTANT, assistant_message),
-                )
-            connection.commit()
-
-        return True, ""
-    except Exception as error:
-        return False, str(error)
-
-
-def only_digits(value):
-    return "".join(ch for ch in str(value) if ch.isdigit())
 
 
 def ask_openrouter(history):
@@ -278,15 +220,11 @@ class AiPracticeProxy(BaseHTTPRequestHandler):
                 if session["name"] == "Новый звонок":
                     session["name"] = make_session_name(prompt)
 
-                saved_to_db, db_error = save_dialog_to_database(session, prompt, answer)
-
                 self.send_json({
                     "ok": True,
                     "session_id": session["id"],
                     "session_name": session["name"],
                     "answer": answer,
-                    "saved_to_db": saved_to_db,
-                    "db_error": db_error,
                 })
                 return
 

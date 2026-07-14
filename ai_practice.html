@@ -60,17 +60,20 @@ function buildInitialCallsJson() {
     );
 
     var callParts = [];
+    var callSessionId;
+    var messages;
+    var messageParts;
     for (session in sessions) {
-        var sessionId = sqlId(session.id);
-        var messages = db(
+        callSessionId = sqlId(session.id);
+        messages = db(
             "SELECT m.id, r.role AS role_name, m.content " +
             "FROM ai_practice.dialog_messages m " +
             "INNER JOIN ai_practice.roles r ON r.id = m.role_id " +
-            "WHERE m.session_id = " + sessionId + " AND m.role_id IN (" + ROLE_USER + ", " + ROLE_ASSISTANT + ") " +
+            "WHERE m.session_id = " + callSessionId + " AND m.role_id IN (" + ROLE_USER + ", " + ROLE_ASSISTANT + ") " +
             "ORDER BY m.id ASC"
         );
 
-        var messageParts = [];
+        messageParts = [];
         for (message in messages) {
             messageParts.push(
                 "{\"role\":" + jsonString(message.role_name) +
@@ -79,7 +82,7 @@ function buildInitialCallsJson() {
         }
 
         callParts.push(
-            "{\"id\":" + sessionId +
+            "{\"id\":" + callSessionId +
             ",\"name\":" + jsonString(session.name) +
             ",\"created_at\":" + jsonString(session.created_at) +
             ",\"messages\":[" + messageParts.join(",") + "]}"
@@ -830,11 +833,6 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
                 currentCall.title = data.session_name;
 
                 addMessage(data.answer, "ai");
-                if (data.saved_to_db) {
-                    console.info("Звонок сохранен в БД через proxy");
-                } else if (data.db_error) {
-                    console.warn("Не получилось сохранить звонок в БД через proxy:", data.db_error);
-                }
                 await saveMessagesToDatabase(currentCall.id, prompt, data.answer);
                 recentCalls = [currentCall, ...recentCalls.filter((call) => String(call.id) !== String(currentCall.id))];
                 loadRecentCalls();
