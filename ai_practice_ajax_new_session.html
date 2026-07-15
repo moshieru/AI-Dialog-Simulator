@@ -1,6 +1,7 @@
 <%
 var API_TOKEN = "SUPER_SECRET_TOKEN";
 var TYPE_CALL = 1;
+var DEBUG_LOG = [];
 
 function reqParam(name) {
 	var v = "";
@@ -82,7 +83,7 @@ function apiOk(fields) {
 }
 
 function apiError(message) {
-	return "{\"ok\":false,\"error\":" + jsonString(message) + "}";
+	return "{\"ok\":false,\"error\":" + jsonString(message) + ",\"debug\":" + jsonString(DEBUG_LOG.join(" || ")) + "}";
 }
 
 function rowValue(row, name) {
@@ -98,59 +99,169 @@ function rowValue(row, name) {
 		return String(row.GetProperty(name));
 	} catch (e3) {}
 
+	if (name == "id") {
+		try {
+			return String(row.ID);
+		} catch (eId1) {}
+		try {
+			return String(row.GetOptProperty("ID", ""));
+		} catch (eId2) {}
+		try {
+			return String(row.GetProperty("ID"));
+		} catch (eId3) {}
+	}
+
+	if (name == "name") {
+		try {
+			return String(row.NAME);
+		} catch (eName1) {}
+		try {
+			return String(row.GetOptProperty("NAME", ""));
+		} catch (eName2) {}
+		try {
+			return String(row.GetProperty("NAME"));
+		} catch (eName3) {}
+	}
+
+	if (name == "type_id") {
+		try {
+			return String(row.TYPE_ID);
+		} catch (eType1) {}
+		try {
+			return String(row.GetOptProperty("TYPE_ID", ""));
+		} catch (eType2) {}
+		try {
+			return String(row.GetProperty("TYPE_ID"));
+		} catch (eType3) {}
+	}
+
+	if (name == "user_id") {
+		try {
+			return String(row.USER_ID);
+		} catch (eUser1) {}
+		try {
+			return String(row.GetOptProperty("USER_ID", ""));
+		} catch (eUser2) {}
+		try {
+			return String(row.GetProperty("USER_ID"));
+		} catch (eUser3) {}
+	}
+
+	if (name == "created_at") {
+		try {
+			return String(row.CREATED_AT);
+		} catch (eCreated1) {}
+		try {
+			return String(row.GetOptProperty("CREATED_AT", ""));
+		} catch (eCreated2) {}
+		try {
+			return String(row.GetProperty("CREATED_AT"));
+		} catch (eCreated3) {}
+	}
+
 	return "";
 }
+
+function execSql(sql) {
+	DEBUG_LOG.push(sql);
+	return ArrayCount(XQuery("sql: " + sql));
+}
+
+function selectFirstValue(sql, fieldName) {
+	var rows;
+	var row;
+
+	DEBUG_LOG.push(sql);
+	rows = XQuery("sql: " + sql);
+
+	if (rows == undefined || ArrayCount(rows) == 0) {
+		return "";
+	}
+
+	row = ArrayOptFirstElem(rows);
+	return rowValue(row, fieldName);
+}
+
+function debugRows(sql) {
+	var rows;
+	var row;
+	var parts = [];
+	var index = 0;
+
+	DEBUG_LOG.push(sql);
+	rows = XQuery("sql: " + sql);
+
+	for (row in rows) {
+		index++;
+		parts.push(
+			"{id:" + rowValue(row, "id") +
+			",name:" + rowValue(row, "name") +
+			",type_id:" + rowValue(row, "type_id") +
+			",user_id:" + rowValue(row, "user_id") +
+			",created_at:" + rowValue(row, "created_at") + "}"
+		);
+	}
+
+	return "count=" + index + " rows=" + parts.join(" | ");
+}
+
+var responseJson = "";
 
 try {
 	var token = reqParam("token");
 	var collaboratorId = onlyDigits(reqParam("collaborator_id"));
-	var sql;
-	var rows;
-	var row;
+	var insertSql;
 	var sessionId = "";
+	var sessionCount = "";
+	var latestRowsDebug = "";
+	var userRowsDebug = "";
 
 	if (API_TOKEN != "" && token != API_TOKEN) {
-		%><%=apiError("Неверный token")%><%
-		Cancel();
+		responseJson = apiError("Неверный token");
+	} else if (collaboratorId == "0") {
+		responseJson = apiError("collaborator_id не передан");
+	} else {
+		insertSql =
+			"INSERT INTO ai_practice.dialog_sessions (name, type_id, user_id, created_at) VALUES (" +
+				sqlTextOrNull("New call", 255) + ", " +
+				TYPE_CALL + ", " +
+				sqlIntOrNull(collaboratorId) + ", " +
+				"CURRENT_DATE" +
+			")";
+
+		execSql(insertSql);
+
+		latestRowsDebug = debugRows(
+			"SELECT id, name, type_id, user_id, created_at FROM ai_practice.dialog_sessions ORDER BY id DESC LIMIT 5"
+		);
+
+		userRowsDebug = debugRows(
+			"SELECT id, name, type_id, user_id, created_at FROM ai_practice.dialog_sessions " +
+			"WHERE user_id = " + sqlIntOrNull(collaboratorId) + " ORDER BY id DESC LIMIT 5"
+		);
+
+		sessionId = onlyDigits(selectFirstValue(
+			"SELECT id FROM ai_practice.dialog_sessions " +
+			"WHERE user_id = " + sqlIntOrNull(collaboratorId) + " AND type_id = " + TYPE_CALL + " " +
+			"ORDER BY id DESC LIMIT 1",
+			"id"
+		));
+
+		if (sessionId == "" || sessionId == "0") {
+			responseJson = apiError("Сессия не создалась. collaborator_id=" + collaboratorId + ". latest: " + latestRowsDebug + ". user_rows: " + userRowsDebug);
+		} else {
+			responseJson = apiOk(
+				",\"session_id\":" + jsonString(sessionId) +
+				",\"session_name\":\"Новый звонок\"" +
+				",\"debug\":" + jsonString(DEBUG_LOG.join(" || "))
+			);
+		}
 	}
-
-	if (collaboratorId == "0") {
-		%><%=apiError("collaborator_id не передан")%><%
-		Cancel();
-	}
-
-	sql =
-		"INSERT INTO ai_practice.dialog_sessions (name, type_id, user_id, created_at) VALUES (" +
-			sqlTextOrNull("New call", 255) + ", " +
-			TYPE_CALL + ", " +
-			sqlIntOrNull(collaboratorId) + ", " +
-			"CURRENT_DATE" +
-		")";
-
-	ArrayCount(XQuery("sql: " + sql));
-
-	rows = XQuery(
-		"sql: SELECT id FROM ai_practice.dialog_sessions " +
-		"WHERE user_id = " + sqlIntOrNull(collaboratorId) + " AND type_id = " + TYPE_CALL + " " +
-		"ORDER BY id DESC LIMIT 1"
-	);
-
-	if (rows != undefined && ArrayCount(rows) > 0) {
-		row = ArrayOptFirstElem(rows);
-		sessionId = onlyDigits(rowValue(row, "id"));
-	}
-
-	if (sessionId == "" || sessionId == "0") {
-		%><%=apiError("Сессия не создалась")%><%
-		Cancel();
-	}
-
-	%><%=apiOk(",\"session_id\":" + jsonString(sessionId) + ",\"session_name\":\"Новый звонок\"")%><%
 } catch (e) {
 	try {
 		alert(e);
 	} catch (eAlert) {}
 
-	%><%=apiError(String(e))%><%
+	responseJson = apiError(String(e));
 }
-%>
+%><%=responseJson%>

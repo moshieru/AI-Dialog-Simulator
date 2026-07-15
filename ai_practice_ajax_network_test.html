@@ -1,0 +1,98 @@
+<%
+function safeString(value) {
+	if (value == undefined || value == null) {
+		return "";
+	}
+
+	return String(value);
+}
+
+function jsonEscape(value) {
+	return String(value)
+		.split("\\").join("\\\\")
+		.split("\"").join("\\\"")
+		.split("\r").join("\\r")
+		.split("\n").join("\\n")
+		.split("\t").join("\\t");
+}
+
+function jsonString(value) {
+	return "\"" + jsonEscape(value) + "\"";
+}
+
+function shortText(value) {
+	value = safeString(value);
+	return value.length > 500 ? value.substring(0, 500) : value;
+}
+
+function testUrl(name, url, headers) {
+	var request;
+	var response;
+	var body = "";
+	var code = "";
+
+	if (headers == undefined || headers == null || headers == "") {
+		headers = "Accept: application/json\nAccept-Encoding: identity\n";
+	} else if (!StrContains(headers, "Accept-Encoding:")) {
+		headers += "Accept-Encoding: identity\n";
+	}
+
+	try {
+		request = tools.get_object_assembly("HttpRequest");
+		response = request.Open(url, "get", null, headers, null, null, 20);
+
+		if (response == undefined || response == null) {
+			return "{\"name\":" + jsonString(name) +
+				",\"url\":" + jsonString(url) +
+				",\"ok\":false" +
+				",\"status\":\"NULL\"" +
+				",\"body\":\"\"}";
+		}
+
+		try {
+			code = safeString(response.RespCode);
+		} catch (eCode) {
+			code = "NO_RespCode";
+		}
+
+		try {
+			body = safeString(response.Body);
+		} catch (eBody) {
+			body = "NO_Body: " + safeString(eBody);
+		}
+
+		return "{\"name\":" + jsonString(name) +
+			",\"url\":" + jsonString(url) +
+			",\"ok\":true" +
+			",\"status\":" + jsonString(code) +
+			",\"body\":" + jsonString(shortText(body)) + "}";
+	} catch (e) {
+		return "{\"name\":" + jsonString(name) +
+			",\"url\":" + jsonString(url) +
+			",\"ok\":false" +
+			",\"status\":\"EXCEPTION\"" +
+			",\"body\":" + jsonString(shortText(e)) + "}";
+	}
+}
+
+var results = [];
+
+results.push(testUrl(
+	"openrouter_models",
+	"https://openrouter.ai/api/v1/models",
+	"Accept: application/json\n"
+));
+
+results.push(testUrl(
+	"google_sheets",
+	"https://sheets.googleapis.com/v4/spreadsheets",
+	"Accept: application/json\n"
+));
+
+results.push(testUrl(
+	"openai_models_no_auth",
+	"https://api.openai.com/v1/models",
+	"Accept: application/json\n"
+));
+
+%>{"ok":true,"results":[<%=results.join(",")%>]}

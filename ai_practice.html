@@ -546,12 +546,10 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
         const RECENT_COLLAPSED_KEY = "ai-practice-recent-collapsed";
         const INITIAL_CALLS = <%=INITIAL_CALLS_JSON%>;
         const AI_PRACTICE_USER_ID = "<%=curUserID%>";
-        // Для WT на https замени localhost на публичный HTTPS-адрес proxy.
-        const AI_PRACTICE_PROXY_URL = "http://localhost:8787";
         const AI_PRACTICE_API = {
-            newSession: "https://education-test.etagi.com/custom_web_template.html?custom_web_template_id=7662327141306009678",
-            chat: `${AI_PRACTICE_PROXY_URL}/chat`,
-            saveMessages: "https://education-test.etagi.com/custom_web_template.html?custom_web_template_id=7662327403158627238",
+            newSession: "https://education.etagi.com/custom_web_template.html?custom_web_template_id=7662687472721827093",
+            chat: "https://education.etagi.com/custom_web_template.html?custom_web_template_id=7662687889453839718",
+            saveMessages: "https://education.etagi.com/custom_web_template.html?custom_web_template_id=7662687686249701400",
         };
         const AI_PRACTICE_API_TOKEN = "SUPER_SECRET_TOKEN";
 
@@ -823,7 +821,7 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
 
             try {
                 const sessionId = await ensureCurrentSession();
-                const data = await apiRequest(AI_PRACTICE_API.chat, {
+                const data = await formRequest(AI_PRACTICE_API.chat, {
                     session_id: sessionId,
                     prompt,
                 });

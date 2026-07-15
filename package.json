@@ -1,0 +1,12 @@
+{
+  "name": "ai-practice-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node ai_practice_proxy.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

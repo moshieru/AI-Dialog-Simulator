@@ -1,0 +1,530 @@
+<%
+var API_TOKEN = "SUPER_SECRET_TOKEN";
+var OPENAI_API_KEY = "PASTE_OPENAI_API_KEY_HERE";
+var OPENAI_MODEL = "gpt-5.6-luna";
+var OPENAI_FALLBACK_ANSWER = "Алло, слушаю.";
+var SYSTEM_PROMPT =
+	"Ты — ИИ-тренажер и играешь роль продавца квартиры. Пользователь — риелтор, который звонит тебе по поводу продажи. " +
+	"Веди себя как реальный собственник: в начале осторожно и немного недоверчиво, но без грубости. " +
+	"Квартира: 2-комнатная, обычное жилое состояние, продаешь сам, хочешь купить жилье побольше, цену считаешь справедливой, комиссию платить не хочешь. " +
+	"Не раскрывай всю информацию сразу, отвечай только на вопросы пользователя. " +
+	"Если риелтор вежлив, задает хорошие вопросы, не давит и объясняет пользу — постепенно становись открытее. " +
+	"Если спорит, давит, пугает или сразу продает услугу — сопротивляйся. " +
+	"Используй возражения: «Я сам продам», «Не хочу платить комиссию», «Вы будете сбивать цену», «У меня уже есть объявление», «Мне нужно подумать», «Что вы конкретно будете делать?». " +
+	"Отвечай коротко, живо, как в телефонном разговоре. Не подсказывай пользователю и не оценивай его во время диалога. " +
+	"Начни с фразы: «Алло, слушаю».";
+
+function reqParam(name) {
+	var v = "";
+
+	try {
+		v = Request.Form.GetProperty(name);
+	} catch (e) {}
+
+	if (v == undefined || v == null || v == "") {
+		try {
+			v = Request.QueryString.GetProperty(name);
+		} catch (e2) {}
+	}
+
+	if (v == undefined || v == null) {
+		v = "";
+	}
+
+	return String(v);
+}
+
+function onlyDigits(value) {
+	value = String(value);
+	var result = "";
+	var i;
+	var code;
+
+	for (i = 0; i < value.length; i++) {
+		code = value.charCodeAt(i);
+		if (code >= 48 && code <= 57) {
+			result += value.charAt(i);
+		}
+	}
+
+	return result == "" ? "0" : result;
+}
+
+function jsonEscape(value) {
+	return String(value)
+		.split("\\").join("\\\\")
+		.split("\"").join("\\\"")
+		.split("\r").join("\\r")
+		.split("\n").join("\\n")
+		.split("\t").join("\\t");
+}
+
+function jsonString(value) {
+	return "\"" + jsonEscape(value) + "\"";
+}
+
+function parseJson(text) {
+	try {
+		return ParseJson(text);
+	} catch (e0) {
+		try {
+			return JSON.parse(text);
+		} catch (e1) {
+			try {
+				return eval("(" + text + ")");
+			} catch (e2) {
+			throw "OpenAI returned non-JSON response: " + shortText(text);
+			}
+		}
+	}
+}
+
+function messageJson(role, content) {
+	return "{\"role\":" + jsonString(role) + ",\"content\":" + jsonString(content) + "}";
+}
+
+function apiOk(fields) {
+	return "{\"ok\":true" + fields + "}";
+}
+
+function apiError(message) {
+	return "{\"ok\":false,\"error\":" + jsonString(message) + "}";
+}
+
+function normalizeTitle(value) {
+	var title = String(value).split("\r").join(" ").split("\n").join(" ").split("\t").join(" ");
+
+	while (title.indexOf("  ") >= 0) {
+		title = StrReplace(title, "  ", " ");
+	}
+
+	if (title.length > 48) {
+		title = title.substring(0, 48) + "...";
+	}
+
+	return title == "" ? "New call" : title;
+}
+
+function responseText(response) {
+	if (response == undefined || response == null) {
+		return "";
+	}
+
+	try {
+		if (response.Body != undefined) {
+			return String(response.Body);
+		}
+	} catch (e1) {}
+
+	try {
+		if (response.body != undefined) {
+			return String(response.body);
+		}
+	} catch (e2) {}
+
+	try {
+		if (response.Text != undefined) {
+			return String(response.Text);
+		}
+	} catch (e3) {}
+
+	try {
+		if (response.text != undefined) {
+			return String(response.text);
+		}
+	} catch (e4) {}
+
+	try {
+		if (response.ResponseText != undefined) {
+			return String(response.ResponseText);
+		}
+	} catch (e5) {}
+
+	try {
+		if (response.responseText != undefined) {
+			return String(response.responseText);
+		}
+	} catch (e6) {}
+
+	return String(response);
+}
+
+function responseTextFromRequest(request) {
+	try {
+		if (request.Body != undefined) {
+			return String(request.Body);
+		}
+	} catch (e1) {}
+
+	try {
+		if (request.body != undefined) {
+			return String(request.body);
+		}
+	} catch (e2) {}
+
+	try {
+		if (request.Text != undefined) {
+			return String(request.Text);
+		}
+	} catch (e3) {}
+
+	try {
+		if (request.text != undefined) {
+			return String(request.text);
+		}
+	} catch (e4) {}
+
+	try {
+		if (request.ResponseText != undefined) {
+			return String(request.ResponseText);
+		}
+	} catch (e5) {}
+
+	try {
+		if (request.responseText != undefined) {
+			return String(request.responseText);
+		}
+	} catch (e6) {}
+
+	try {
+		if (request.RespBody != undefined) {
+			return String(request.RespBody);
+		}
+	} catch (e7) {}
+
+	try {
+		if (request.resp_body != undefined) {
+			return String(request.resp_body);
+		}
+	} catch (e8) {}
+
+	try {
+		return String(request.GetResponseText());
+	} catch (e9) {}
+
+	try {
+		return String(request.GetResponseBody());
+	} catch (e10) {}
+
+	try {
+		return String(request.GetRespText());
+	} catch (e11) {}
+
+	try {
+		return String(request.GetRespBody());
+	} catch (e12) {}
+
+	try {
+		return String(request.GetBody());
+	} catch (e13) {}
+
+	try {
+		return String(request.GetText());
+	} catch (e14) {}
+
+	try {
+		return String(request.GetProperty("Body"));
+	} catch (e15) {}
+
+	try {
+		return String(request.GetProperty("body"));
+	} catch (e16) {}
+
+	try {
+		return String(request.GetProperty("ResponseText"));
+	} catch (e17) {}
+
+	try {
+		return String(request.GetProperty("responseText"));
+	} catch (e18) {}
+
+	return "";
+}
+
+function shortText(value) {
+	value = String(value);
+	return value.length > 1000 ? value.substring(0, 1000) : value;
+}
+
+function debugObject(label, object) {
+	var parts = [];
+	var key;
+	var value;
+	var count = 0;
+
+	if (object == undefined || object == null) {
+		return label + "=NULL";
+	}
+
+	try {
+		parts.push("String=" + shortText(String(object)));
+	} catch (eString) {}
+
+	try {
+		parts.push("Status=" + String(object.Status));
+	} catch (eStatus1) {}
+	try {
+		parts.push("status=" + String(object.status));
+	} catch (eStatus2) {}
+	try {
+		parts.push("StatusCode=" + String(object.StatusCode));
+	} catch (eStatus3) {}
+	try {
+		parts.push("status_code=" + String(object.status_code));
+	} catch (eStatus4) {}
+	try {
+		parts.push("Code=" + String(object.Code));
+	} catch (eStatus5) {}
+	try {
+		parts.push("code=" + String(object.code));
+	} catch (eStatus6) {}
+
+	try {
+		parts.push("Body=" + shortText(String(object.Body)));
+	} catch (eBody1) {}
+	try {
+		parts.push("body=" + shortText(String(object.body)));
+	} catch (eBody2) {}
+	try {
+		parts.push("Text=" + shortText(String(object.Text)));
+	} catch (eText1) {}
+	try {
+		parts.push("text=" + shortText(String(object.text)));
+	} catch (eText2) {}
+	try {
+		parts.push("ResponseText=" + shortText(String(object.ResponseText)));
+	} catch (eResp1) {}
+	try {
+		parts.push("responseText=" + shortText(String(object.responseText)));
+	} catch (eResp2) {}
+	try {
+		parts.push("RespBody=" + shortText(String(object.RespBody)));
+	} catch (eResp3) {}
+	try {
+		parts.push("GetResponseText()=" + shortText(String(object.GetResponseText())));
+	} catch (eMethod1) {}
+	try {
+		parts.push("GetResponseBody()=" + shortText(String(object.GetResponseBody())));
+	} catch (eMethod2) {}
+	try {
+		parts.push("GetRespText()=" + shortText(String(object.GetRespText())));
+	} catch (eMethod3) {}
+	try {
+		parts.push("GetRespBody()=" + shortText(String(object.GetRespBody())));
+	} catch (eMethod4) {}
+	try {
+		parts.push("GetBody()=" + shortText(String(object.GetBody())));
+	} catch (eMethod5) {}
+	try {
+		parts.push("GetText()=" + shortText(String(object.GetText())));
+	} catch (eMethod6) {}
+	try {
+		parts.push("GetStatus()=" + shortText(String(object.GetStatus())));
+	} catch (eMethod7) {}
+	try {
+		parts.push("GetStatusCode()=" + shortText(String(object.GetStatusCode())));
+	} catch (eMethod8) {}
+	try {
+		parts.push("GetProperty(Body)=" + shortText(String(object.GetProperty("Body"))));
+	} catch (eMethod9) {}
+	try {
+		parts.push("GetProperty(ResponseText)=" + shortText(String(object.GetProperty("ResponseText"))));
+	} catch (eMethod10) {}
+
+	try {
+		for (key in object) {
+			count++;
+			if (count <= 20) {
+				try {
+					value = String(object[key]);
+				} catch (eValue) {
+					value = "[unreadable]";
+				}
+				parts.push(String(key) + "=" + shortText(value));
+			}
+		}
+	} catch (eForIn) {}
+
+	return label + "={" + parts.join("; ") + "}";
+}
+
+function httpOpen(request, url, method, body, headers, timeoutSec) {
+	var timeout = timeoutSec != undefined ? timeoutSec : 45;
+
+	if (headers == undefined || headers == null) {
+		headers = "";
+	}
+
+	if (!StrContains(headers, "Accept-Encoding:")) {
+		headers += "Accept-Encoding: identity\n";
+	}
+
+	return request.Open(url, method, body, headers, null, null, timeout);
+}
+
+function extractAnswer(openAiText) {
+	var data = parseJson(openAiText);
+	var choice;
+	var message;
+	var content;
+	var finishReason;
+
+	try {
+		choice = data.choices[0];
+	} catch (e1) {
+		throw "OpenAI response has no choices: " + shortText(openAiText);
+	}
+
+	try {
+		message = choice.message;
+		content = message.content;
+	} catch (e2) {
+		message = {};
+		content = "";
+	}
+
+	if (content != undefined && content != null && String(content) != "") {
+		return String(content);
+	}
+
+	try {
+		if (choice.text != undefined && choice.text != null && String(choice.text) != "") {
+			return String(choice.text);
+		}
+	} catch (e3) {}
+
+	try {
+		if (data.output_text != undefined && data.output_text != null && String(data.output_text) != "") {
+			return String(data.output_text);
+		}
+	} catch (e4) {}
+
+	try {
+		if (message.reasoning != undefined && message.reasoning != null && String(message.reasoning) != "") {
+			return OPENAI_FALLBACK_ANSWER;
+		}
+	} catch (e5) {}
+
+	try {
+		finishReason = choice.finish_reason;
+	} catch (e6) {
+		finishReason = "";
+	}
+
+	throw "OpenAI returned empty content" + (finishReason == "" ? "" : " (finish_reason=" + finishReason + ")") + ": " + shortText(openAiText);
+}
+
+function askOpenAI(prompt) {
+	var body =
+		"{\"model\":" + jsonString(OPENAI_MODEL) +
+		",\"messages\":[" +
+			messageJson("system", SYSTEM_PROMPT) + "," +
+			messageJson("user", prompt) +
+		"],\"temperature\":0.7,\"max_completion_tokens\":900}";
+
+	var headers =
+		"Content-Type: application/json\n" +
+		"Accept: application/json\n" +
+		"Authorization: Bearer " + OPENAI_API_KEY + "\n" +
+		"X-Title: AI Practice\n";
+
+	var request = tools.get_object_assembly("HttpRequest");
+	var respCode;
+	var respBody;
+	var response = httpOpen(
+		request,
+		"https://api.openai.com/v1/chat/completions",
+		"post",
+		body,
+		headers,
+		45
+	);
+
+	if (response == undefined || response == null) {
+		throw "OpenAI chat request returned null. " + checkOpenAIModels();
+	}
+
+	try {
+		respCode = response.RespCode;
+	} catch (eRespCode) {
+		throw "OpenAI response has no RespCode: " + debugObject("response", response);
+	}
+
+	try {
+		respBody = String(response.Body);
+	} catch (eBody) {
+		throw "OpenAI response has no Body: " + debugObject("response", response);
+	}
+
+	if (respCode != 200) {
+		throw "OpenAI HTTP " + respCode + ": " + shortText(respBody);
+	}
+
+	return extractAnswer(respBody);
+}
+
+function checkOpenAIModels() {
+	var request;
+	var response;
+	var headers =
+		"Accept: application/json\n" +
+		"Authorization: Bearer " + OPENAI_API_KEY + "\n";
+
+	try {
+		request = tools.get_object_assembly("HttpRequest");
+		response = httpOpen(
+			request,
+			"https://api.openai.com/v1/models",
+			"get",
+			null,
+			headers,
+			20
+		);
+	} catch (e) {
+		return "Models check exception: " + String(e);
+	}
+
+	if (response == undefined || response == null) {
+		return "Models check also returned null: outbound HTTPS to api.openai.com:443 is probably blocked or requires proxy/allowlist.";
+	}
+
+	try {
+		return "Models check returned RespCode=" + response.RespCode + ", Body=" + shortText(String(response.Body));
+	} catch (eBody) {
+		return "Models check returned response but cannot read RespCode/Body: " + debugObject("models_response", response);
+	}
+}
+
+var responseJson = "";
+
+try {
+	var token = reqParam("token");
+	var sessionId = onlyDigits(reqParam("session_id"));
+	var prompt = reqParam("prompt");
+	var answer = "";
+
+	if (API_TOKEN != "" && token != API_TOKEN) {
+		responseJson = apiError("Неверный token");
+	} else if (sessionId == "0") {
+		responseJson = apiError("session_id не передан");
+	} else if (prompt == "") {
+		responseJson = apiError("Пустой текст сообщения");
+	} else if (OPENAI_API_KEY == "" || OPENAI_API_KEY == "PASTE_OPENAI_API_KEY_HERE") {
+		responseJson = apiError("OPENAI_API_KEY не заполнен в ai_practice_ajax_chat.html");
+	} else {
+		answer = askOpenAI(prompt);
+
+		responseJson = apiOk(
+			",\"session_id\":" + jsonString(sessionId) +
+			",\"session_name\":" + jsonString(normalizeTitle(prompt)) +
+			",\"answer\":" + jsonString(answer)
+		);
+	}
+} catch (e) {
+	try {
+		alert(e);
+	} catch (eAlert) {}
+
+	responseJson = apiError(String(e));
+}
+%><%=responseJson%>
