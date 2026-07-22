@@ -125,7 +125,7 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
             margin: 25px 0 30px;
             max-width: 1620px;
             width: 97%;
-            background: #2c3979 url("Rectangle.png") center/cover no-repeat;
+            background: #2c3979 url("https://education.etagi.com/download_file.html?file_id=7665313291582231175") center/cover no-repeat;
             min-height: 300px;
             border-radius: 10px;
             justify-content: space-between;
@@ -521,7 +521,7 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
                     <div class="chat-footer">
                         <span class="hint" id="voiceHint">Нажми на кнопку микрофона, чтобы начать разговор</span>
                         <button class="mic-btn" id="micBtn" title="Начать разговор" type="button">
-                            <img src="mic.png" alt="Микрофон">
+                            <img src="https://education.etagi.com/download_file.html?file_id=7665312771520460339" alt="Микрофон">
                         </button>
                     </div>
                 </main>
@@ -555,6 +555,7 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
 
         let recognition = null;
         let isListening = false;
+        let currentAudio = null;
         let recentCalls = Array.isArray(INITIAL_CALLS) ? INITIAL_CALLS : [];
         let currentCall = createEmptyCall();
 
@@ -565,6 +566,11 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
                 title: "Новый звонок",
                 messages: [],
             };
+        }
+
+        function normalizeSessionId(value) {
+            const sessionId = String(value || "").replace(/\D/g, "");
+            return sessionId === "0" ? "" : sessionId;
         }
 
         async function apiRequest(url, payload = {}, method = "POST") {
@@ -660,7 +666,13 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
             }
 
             const data = await formRequest(AI_PRACTICE_API.newSession);
-            currentCall.id = String(data.session_id);
+            const sessionId = normalizeSessionId(data.session_id);
+
+            if (!sessionId) {
+                throw new Error(`Сервер не вернул session_id: ${JSON.stringify(data).slice(0, 300)}`);
+            }
+
+            currentCall.id = sessionId;
             currentCall.name = data.session_name;
             currentCall.title = data.session_name;
             recentCalls = [currentCall, ...recentCalls.filter((call) => String(call.id) !== String(currentCall.id))];
@@ -779,9 +791,39 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
         }
 
         function stopSpeaking() {
+            if (currentAudio) {
+                currentAudio.pause();
+                currentAudio.currentTime = 0;
+                currentAudio = null;
+            }
+
             if (canSpeak) {
                 window.speechSynthesis.cancel();
             }
+        }
+
+        function speakWithOpenAITts(audioBase64, audioMime = "audio/mpeg") {
+            return new Promise((resolve) => {
+                if (!audioBase64) {
+                    resolve(false);
+                    return;
+                }
+
+                currentAudio = new Audio(`data:${audioMime};base64,${audioBase64}`);
+                currentAudio.onended = () => {
+                    currentAudio = null;
+                    resolve(true);
+                };
+                currentAudio.onerror = () => {
+                    currentAudio = null;
+                    resolve(false);
+                };
+
+                currentAudio.play().catch(() => {
+                    currentAudio = null;
+                    resolve(false);
+                });
+            });
         }
 
         function speakWithBrowser(text) {
@@ -802,10 +844,17 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
             });
         }
 
-        async function speak(text) {
+        async function speak(text, audioBase64 = "", audioMime = "audio/mpeg") {
             stopSpeaking();
             status.textContent = "";
             setVoiceHint("");
+
+            const didPlayOpenAiAudio = await speakWithOpenAITts(audioBase64, audioMime);
+
+            if (didPlayOpenAiAudio) {
+                return;
+            }
+
             await speakWithBrowser(text);
         }
 
@@ -831,10 +880,13 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
                 currentCall.title = data.session_name;
 
                 addMessage(data.answer, "ai");
+                if (data.tts_error) {
+                    console.warn("Не получилось озвучить через OpenAI TTS:", data.tts_error);
+                }
                 await saveMessagesToDatabase(currentCall.id, prompt, data.answer);
                 recentCalls = [currentCall, ...recentCalls.filter((call) => String(call.id) !== String(currentCall.id))];
                 loadRecentCalls();
-                await speak(data.answer);
+                await speak(data.answer, data.audio_base64, data.audio_mime);
             } catch (error) {
                 addMessage(error.message, "error", false);
                 status.textContent = "Ошибка запроса";
@@ -855,8 +907,14 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
             stopSpeaking();
 
             const data = await formRequest(AI_PRACTICE_API.newSession);
+            const sessionId = normalizeSessionId(data.session_id);
+
+            if (!sessionId) {
+                throw new Error(`Сервер не вернул session_id: ${JSON.stringify(data).slice(0, 300)}`);
+            }
+
             currentCall = {
-                id: String(data.session_id),
+                id: sessionId,
                 name: data.session_name,
                 title: data.session_name,
                 messages: [],

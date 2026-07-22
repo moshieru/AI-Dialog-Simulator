@@ -1,7 +1,9 @@
 <%
-var API_TOKEN = "SUPER_SECRET_TOKEN";
-var OPENAI_API_KEY = "PASTE_OPENAI_API_KEY_HERE";
-var OPENAI_MODEL = "gpt-5.6-luna";
+var API_TOKEN = "";
+var OPENAI_API_KEY = "api";
+var OPENAI_MODEL = "gpt-5-mini";
+var OPENAI_TTS_MODEL = "gpt-4o-mini-tts";
+var OPENAI_TTS_VOICE = "nova";
 var OPENAI_FALLBACK_ANSWER = "Алло, слушаю.";
 var SYSTEM_PROMPT =
 	"Ты — ИИ-тренажер и играешь роль продавца квартиры. Пользователь — риелтор, который звонит тебе по поводу продажи. " +
@@ -27,11 +29,27 @@ function reqParam(name) {
 		} catch (e2) {}
 	}
 
+	if (v == undefined || v == null || v == "") {
+		try {
+			v = Request.Query.GetOptProperty(name, "");
+		} catch (e3) {}
+	}
+
 	if (v == undefined || v == null) {
 		v = "";
 	}
 
 	return String(v);
+}
+
+function normalizedToken(value) {
+	value = String(value);
+	value = StrReplace(value, " ", "");
+	value = StrReplace(value, "\r", "");
+	value = StrReplace(value, "\n", "");
+	value = StrReplace(value, "\t", "");
+
+	return value;
 }
 
 function onlyDigits(value) {
@@ -83,6 +101,18 @@ function messageJson(role, content) {
 	return "{\"role\":" + jsonString(role) + ",\"content\":" + jsonString(content) + "}";
 }
 
+function jsonValue(object, name) {
+	try {
+		return String(object.GetOptProperty(name, ""));
+	} catch (e1) {}
+
+	try {
+		return String(object[name]);
+	} catch (e2) {}
+
+	return "";
+}
+
 function apiOk(fields) {
 	return "{\"ok\":true" + fields + "}";
 }
@@ -99,7 +129,7 @@ function normalizeTitle(value) {
 	}
 
 	if (title.length > 48) {
-		title = title.substring(0, 48) + "...";
+		title = leftText(title, 48) + "...";
 	}
 
 	return title == "" ? "New call" : title;
@@ -243,7 +273,32 @@ function responseTextFromRequest(request) {
 
 function shortText(value) {
 	value = String(value);
-	return value.length > 1000 ? value.substring(0, 1000) : value;
+	return value.length > 1000 ? leftText(value, 1000) : value;
+}
+
+function leftText(value, maxLength) {
+	value = String(value);
+	var result = "";
+	var i;
+	var limit = value.length < maxLength ? value.length : maxLength;
+
+	for (i = 0; i < limit; i++) {
+		result += value.charAt(i);
+	}
+
+	return result;
+}
+
+function textAfterPrefix(value, prefixLength) {
+	value = String(value);
+	var result = "";
+	var i;
+
+	for (i = prefixLength; i < value.length; i++) {
+		result += value.charAt(i);
+	}
+
+	return result;
 }
 
 function debugObject(label, object) {
@@ -420,7 +475,7 @@ function askOpenAI(prompt) {
 		",\"messages\":[" +
 			messageJson("system", SYSTEM_PROMPT) + "," +
 			messageJson("user", prompt) +
-		"],\"temperature\":0.7,\"max_completion_tokens\":900}";
+		"],\"max_completion_tokens\":900}";
 
 	var headers =
 		"Content-Type: application/json\n" +
@@ -463,6 +518,90 @@ function askOpenAI(prompt) {
 	return extractAnswer(respBody);
 }
 
+function extractAudioBase64(sseText) {
+	var lines = String(sseText).split("\n");
+	var audio = "";
+	var i;
+	var line;
+	var dataText;
+	var eventJson;
+	var chunk;
+
+	for (i = 0; i < ArrayCount(lines); i++) {
+		line = String(lines[i]);
+
+		if (line.indexOf("data:") != 0) {
+			continue;
+		}
+
+		dataText = textAfterPrefix(line, 5);
+
+		if (StrContains(dataText, "[DONE]")) {
+			continue;
+		}
+
+		try {
+			eventJson = parseJson(dataText);
+			chunk = jsonValue(eventJson, "audio");
+
+			if (chunk != "") {
+				audio += chunk;
+			}
+		} catch (eParseEvent) {}
+	}
+
+	return audio;
+}
+
+function askOpenAITts(text) {
+	var body =
+		"{\"model\":" + jsonString(OPENAI_TTS_MODEL) +
+		",\"voice\":" + jsonString(OPENAI_TTS_VOICE) +
+		",\"input\":" + jsonString(text) +
+		",\"response_format\":\"mp3\"" +
+		",\"stream_format\":\"sse\"" +
+		",\"speed\":1}";
+
+	var headers =
+		"Content-Type: application/json\n" +
+		"Accept: text/event-stream\n" +
+		"Authorization: Bearer " + OPENAI_API_KEY + "\n";
+
+	var request = tools.get_object_assembly("HttpRequest");
+	var respCode;
+	var respBody;
+	var response = httpOpen(
+		request,
+		"https://api.openai.com/v1/audio/speech",
+		"post",
+		body,
+		headers,
+		45
+	);
+
+	if (response == undefined || response == null) {
+		throw "OpenAI TTS request returned null";
+	}
+
+	try {
+		respCode = response.RespCode;
+	} catch (eRespCode) {
+		throw "OpenAI TTS response has no RespCode: " + debugObject("response", response);
+	}
+
+	try {
+		respBody = String(response.Body);
+	} catch (eBody) {
+		throw "OpenAI TTS response has no Body: " + debugObject("response", response);
+	}
+
+	if (respCode != 200) {
+		throw "OpenAI TTS HTTP " + respCode + ": " + shortText(respBody);
+	}
+
+	return extractAudioBase64(respBody);
+}
+
 function checkOpenAIModels() {
 	var request;
 	var response;
@@ -499,14 +638,17 @@ var responseJson = "";
 
 try {
 	var token = reqParam("token");
-	var sessionId = onlyDigits(reqParam("session_id"));
+	var rawSessionId = reqParam("session_id");
+	var sessionId = onlyDigits(rawSessionId);
 	var prompt = reqParam("prompt");
 	var answer = "";
+	var audioBase64 = "";
+	var ttsError = "";
 
-	if (API_TOKEN != "" && token != API_TOKEN) {
-		responseJson = apiError("Неверный token");
+	if (API_TOKEN != "" && normalizedToken(token) != normalizedToken(API_TOKEN)) {
+		responseJson = apiError("Неверный token. token_len=" + String(token.length) + ", expected_len=" + String(API_TOKEN.length));
 	} else if (sessionId == "0") {
-		responseJson = apiError("session_id не передан");
+		responseJson = apiError("session_id не передан. raw_session_id=" + rawSessionId);
 	} else if (prompt == "") {
 		responseJson = apiError("Пустой текст сообщения");
 	} else if (OPENAI_API_KEY == "" || OPENAI_API_KEY == "PASTE_OPENAI_API_KEY_HERE") {
@@ -514,10 +656,19 @@ try {
 	} else {
 		answer = askOpenAI(prompt);
 
+		try {
+			audioBase64 = askOpenAITts(answer);
+		} catch (eTts) {
+			ttsError = String(eTts);
+		}
+
 		responseJson = apiOk(
 			",\"session_id\":" + jsonString(sessionId) +
 			",\"session_name\":" + jsonString(normalizeTitle(prompt)) +
-			",\"answer\":" + jsonString(answer)
+			",\"answer\":" + jsonString(answer) +
+			",\"audio_base64\":" + jsonString(audioBase64) +
+			",\"audio_mime\":\"audio/mpeg\"" +
+			",\"tts_error\":" + jsonString(ttsError)
 		);
 	}
 } catch (e) {
