@@ -319,6 +319,7 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
             flex-direction: column;
             position: relative;
             min-width: 0;
+            min-height: 0;
         }
 
         .chat-header {
@@ -343,7 +344,7 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
             display: flex;
             flex-direction: column;
             gap: 24px;
-            justify-content: flex-end;
+            min-height: 0;
         }
 
         .message {
@@ -781,6 +782,17 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
             }
         }
 
+        function formatHistoryForModel(messages, maxMessages = 10) {
+            const recentMessages = messages.slice(-maxMessages);
+
+            return recentMessages
+                .map((message) => {
+                    const roleName = message.role === "assistant" ? "Assistant" : "User";
+                    return `${roleName}: ${message.content}`;
+                })
+                .join("\n");
+        }
+
         function setBusy(isBusy) {
             voiceButton.disabled = isBusy || !canRecognizeSpeech;
             resetButton.disabled = isBusy;
@@ -802,24 +814,59 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
             }
         }
 
-        function speakWithOpenAITts(audioBase64, audioMime = "audio/mpeg") {
+        function base64ChunkToBytes(chunk) {
+            const binary = atob(chunk);
+            const bytes = new Uint8Array(binary.length);
+
+            for (let index = 0; index < binary.length; index++) {
+                bytes[index] = binary.charCodeAt(index);
+            }
+
+            return bytes;
+        }
+
+        function audioChunksToUrl(audioChunks, audioMime = "audio/mpeg") {
+            const byteChunks = audioChunks.map(base64ChunkToBytes);
+            const blob = new Blob(byteChunks, { type: audioMime });
+
+            return URL.createObjectURL(blob);
+        }
+
+        function speakWithOpenAITts(audioChunks, audioMime = "audio/mpeg") {
             return new Promise((resolve) => {
-                if (!audioBase64) {
+                if (!Array.isArray(audioChunks) || !audioChunks.length) {
+                    console.info("OpenAI TTS audio is empty, falling back to browser voice");
                     resolve(false);
                     return;
                 }
 
-                currentAudio = new Audio(`data:${audioMime};base64,${audioBase64}`);
+                let audioUrl;
+
+                try {
+                    audioUrl = audioChunksToUrl(audioChunks, audioMime);
+                } catch (error) {
+                    console.warn("Browser could not assemble OpenAI TTS audio chunks:", error);
+                    resolve(false);
+                    return;
+                }
+
+                console.info("OpenAI TTS audio received, chunks:", audioChunks.length);
+                currentAudio = new Audio(audioUrl);
                 currentAudio.onended = () => {
+                    URL.revokeObjectURL(audioUrl);
                     currentAudio = null;
                     resolve(true);
                 };
                 currentAudio.onerror = () => {
+                    console.warn("Browser could not decode/play OpenAI TTS audio");
+                    URL.revokeObjectURL(audioUrl);
                     currentAudio = null;
                     resolve(false);
                 };
 
-                currentAudio.play().catch(() => {
+                currentAudio.play().catch((error) => {
+                    console.warn("Browser blocked OpenAI TTS playback:", error);
+                    URL.revokeObjectURL(audioUrl);
                     currentAudio = null;
                     resolve(false);
                 });
@@ -840,16 +887,20 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
                 phrase.onend = resolve;
                 phrase.onerror = resolve;
 
+                try {
+                    window.speechSynthesis.resume();
+                } catch (error) {}
+
                 window.speechSynthesis.speak(phrase);
             });
         }
 
-        async function speak(text, audioBase64 = "", audioMime = "audio/mpeg") {
+        async function speak(text, audioChunks = [], audioMime = "audio/mpeg") {
             stopSpeaking();
             status.textContent = "";
             setVoiceHint("");
 
-            const didPlayOpenAiAudio = await speakWithOpenAITts(audioBase64, audioMime);
+            const didPlayOpenAiAudio = await speakWithOpenAITts(audioChunks, audioMime);
 
             if (didPlayOpenAiAudio) {
                 return;
@@ -864,6 +915,8 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
             }
 
             setBusy(true);
+            const isFirstMessage = !currentCall.messages.some((message) => message.role === "assistant");
+            const historyText = formatHistoryForModel(currentCall.messages);
             addMessage(prompt, "user");
             status.textContent = "Нейросеть отвечает...";
             setVoiceHint("");
@@ -873,6 +926,8 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
                 const data = await formRequest(AI_PRACTICE_API.chat, {
                     session_id: sessionId,
                     prompt,
+                    is_first_message: isFirstMessage ? "1" : "0",
+                    history_text: historyText,
                 });
 
                 currentCall.id = String(data.session_id);
@@ -886,7 +941,7 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
                 await saveMessagesToDatabase(currentCall.id, prompt, data.answer);
                 recentCalls = [currentCall, ...recentCalls.filter((call) => String(call.id) !== String(currentCall.id))];
                 loadRecentCalls();
-                await speak(data.answer, data.audio_base64, data.audio_mime);
+                await speak(data.answer, data.audio_chunks, data.audio_mime);
             } catch (error) {
                 addMessage(error.message, "error", false);
                 status.textContent = "Ошибка запроса";

@@ -3,7 +3,7 @@ var API_TOKEN = "";
 var OPENAI_API_KEY = "api";
 var OPENAI_MODEL = "gpt-5-mini";
 var OPENAI_TTS_MODEL = "gpt-4o-mini-tts";
-var OPENAI_TTS_VOICE = "nova";
+var OPENAI_TTS_VOICE = "cedar";
 var OPENAI_FALLBACK_ANSWER = "Алло, слушаю.";
 var SYSTEM_PROMPT =
 	"Ты — ИИ-тренажер и играешь роль продавца квартиры. Пользователь — риелтор, который звонит тебе по поводу продажи. " +
@@ -99,6 +99,29 @@ function parseJson(text) {
 
 function messageJson(role, content) {
 	return "{\"role\":" + jsonString(role) + ",\"content\":" + jsonString(content) + "}";
+}
+
+function isTruthy(value) {
+	value = String(value);
+	return value == "1" || value == "true" || value == "yes";
+}
+
+function turnInstruction(isFirstMessage) {
+	if (isFirstMessage) {
+		return "This is the first assistant turn in this phone call. Start exactly with: \u0410\u043b\u043b\u043e, \u0441\u043b\u0443\u0448\u0430\u044e. Then continue naturally only if needed.";
+	}
+
+	return "This is NOT the first assistant turn. Never say or repeat the phrase \u0410\u043b\u043b\u043e, \u0441\u043b\u0443\u0448\u0430\u044e. Continue the phone call naturally. Answer in Russian with 1-2 short spoken sentences.";
+}
+
+function historyInstruction(historyText) {
+	historyText = String(historyText);
+
+	if (historyText == "") {
+		return "No previous conversation is available.";
+	}
+
+	return "Previous conversation in this call. User is the realtor, assistant is the apartment owner. Use this context and do not contradict it:\n" + historyText;
 }
 
 function jsonValue(object, name) {
@@ -469,13 +492,16 @@ function extractAnswer(openAiText) {
 	throw "OpenAI returned empty content" + (finishReason == "" ? "" : " (finish_reason=" + finishReason + ")") + ": " + shortText(openAiText);
 }
 
-function askOpenAI(prompt) {
+function askOpenAI(prompt, isFirstMessage, historyText) {
 	var body =
 		"{\"model\":" + jsonString(OPENAI_MODEL) +
+		",\"reasoning_effort\":\"minimal\"" +
 		",\"messages\":[" +
 			messageJson("system", SYSTEM_PROMPT) + "," +
+			messageJson("system", turnInstruction(isFirstMessage)) + "," +
+			messageJson("system", historyInstruction(historyText)) + "," +
 			messageJson("user", prompt) +
-		"],\"max_completion_tokens\":900}";
+		"],\"max_completion_tokens\":700}";
 
 	var headers =
 		"Content-Type: application/json\n" +
@@ -518,9 +544,9 @@ function askOpenAI(prompt) {
 	return extractAnswer(respBody);
 }
 
-function extractAudioBase64(sseText) {
+function extractAudioChunks(sseText) {
 	var lines = String(sseText).split("\n");
-	var audio = "";
+	var chunks = [];
 	var i;
 	var line;
 	var dataText;
@@ -536,6 +562,10 @@ function extractAudioBase64(sseText) {
 
 		dataText = textAfterPrefix(line, 5);
 
+		while (dataText.length > 0 && dataText.charAt(0) == " ") {
+			dataText = textAfterPrefix(dataText, 1);
+		}
+
 		if (StrContains(dataText, "[DONE]")) {
 			continue;
 		}
@@ -544,13 +574,36 @@ function extractAudioBase64(sseText) {
 			eventJson = parseJson(dataText);
 			chunk = jsonValue(eventJson, "audio");
 
+			if (chunk == "") {
+				chunk = jsonValue(eventJson, "delta");
+			}
+
+			if (chunk == "") {
+				chunk = jsonValue(eventJson, "b64_json");
+			}
+
+			if (chunk == "") {
+				chunk = jsonValue(eventJson, "audio_base64");
+			}
+
 			if (chunk != "") {
-				audio += chunk;
+				chunks.push(chunk);
 			}
 		} catch (eParseEvent) {}
 	}
 
-	return audio;
+	return chunks;
+}
+
+function audioChunksJson(chunks) {
+	var parts = [];
+	var i;
+
+	for (i = 0; i < ArrayCount(chunks); i++) {
+		parts.push(jsonString(chunks[i]));
+	}
+
+	return "[" + parts.join(",") + "]";
 }
 
 function askOpenAITts(text) {
@@ -599,7 +652,13 @@ function askOpenAITts(text) {
 		throw "OpenAI TTS HTTP " + respCode + ": " + shortText(respBody);
 	}
 
-	return extractAudioBase64(respBody);
+	var chunks = extractAudioChunks(respBody);
+
+	if (ArrayCount(chunks) == 0) {
+		throw "OpenAI TTS returned no audio chunks. Body preview: " + shortText(respBody);
+	}
+
+	return chunks;
 }
 
 function checkOpenAIModels() {
@@ -641,8 +700,10 @@ try {
 	var rawSessionId = reqParam("session_id");
 	var sessionId = onlyDigits(rawSessionId);
 	var prompt = reqParam("prompt");
+	var isFirstMessage = isTruthy(reqParam("is_first_message"));
+	var historyText = reqParam("history_text");
 	var answer = "";
-	var audioBase64 = "";
+	var audioChunks = [];
 	var ttsError = "";
 
 	if (API_TOKEN != "" && normalizedToken(token) != normalizedToken(API_TOKEN)) {
@@ -654,10 +715,10 @@ try {
 	} else if (OPENAI_API_KEY == "" || OPENAI_API_KEY == "PASTE_OPENAI_API_KEY_HERE") {
 		responseJson = apiError("OPENAI_API_KEY не заполнен в ai_practice_ajax_chat.html");
 	} else {
-		answer = askOpenAI(prompt);
+		answer = askOpenAI(prompt, isFirstMessage, historyText);
 
 		try {
-			audioBase64 = askOpenAITts(answer);
+			audioChunks = askOpenAITts(answer);
 		} catch (eTts) {
 			ttsError = String(eTts);
 		}
@@ -666,7 +727,8 @@ try {
 			",\"session_id\":" + jsonString(sessionId) +
 			",\"session_name\":" + jsonString(normalizeTitle(prompt)) +
 			",\"answer\":" + jsonString(answer) +
-			",\"audio_base64\":" + jsonString(audioBase64) +
+			",\"audio_chunks\":" + audioChunksJson(audioChunks) +
+			",\"audio_chunk_count\":" + String(ArrayCount(audioChunks)) +
 			",\"audio_mime\":\"audio/mpeg\"" +
 			",\"tts_error\":" + jsonString(ttsError)
 		);
