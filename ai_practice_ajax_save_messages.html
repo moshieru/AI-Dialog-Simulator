@@ -40,6 +40,19 @@ function onlyDigits(value) {
 	return result == "" ? "0" : result;
 }
 
+function leftText(value, maxLen) {
+	value = String(value);
+	var result = "";
+	var i;
+	var limit = value.length < maxLen ? value.length : maxLen;
+
+	for (i = 0; i < limit; i++) {
+		result += value.charAt(i);
+	}
+
+	return result;
+}
+
 function sqlTextOrNull(value, maxLen) {
 	value = String(value);
 
@@ -48,7 +61,7 @@ function sqlTextOrNull(value, maxLen) {
 	}
 
 	if (maxLen != undefined && maxLen > 0 && value.length > maxLen) {
-		value = value.substring(0, maxLen);
+		value = leftText(value, maxLen);
 	}
 
 	value = StrReplace(value, "'", "''");
@@ -74,7 +87,7 @@ function normalizeTitle(value) {
 	}
 
 	if (title.length > 48) {
-		title = title.substring(0, 48) + "...";
+		title = leftText(title, 48) + "...";
 	}
 
 	return title == "" ? "New call" : title;

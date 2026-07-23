@@ -953,7 +953,7 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
 
         async function startNewCall() {
             setBusy(true);
-            status.textContent = "Создаю новый звонок...";
+            status.textContent = "Новый звонок готов";
 
             if (isListening && recognition) {
                 recognition.stop();
@@ -961,22 +961,9 @@ var INITIAL_CALLS_JSON = buildInitialCallsJson();
 
             stopSpeaking();
 
-            const data = await formRequest(AI_PRACTICE_API.newSession);
-            const sessionId = normalizeSessionId(data.session_id);
-
-            if (!sessionId) {
-                throw new Error(`Сервер не вернул session_id: ${JSON.stringify(data).slice(0, 300)}`);
-            }
-
-            currentCall = {
-                id: sessionId,
-                name: data.session_name,
-                title: data.session_name,
-                messages: [],
-            };
-
+            currentCall = createEmptyCall();
             showEmptyState();
-            recentCalls = [currentCall, ...recentCalls.filter((call) => String(call.id) !== String(currentCall.id))];
+            recentCalls = recentCalls.filter((call) => String(call.id) !== "");
             loadRecentCalls();
             status.textContent = "";
             setVoiceHint("Нажми на кнопку микрофона, чтобы начать разговор");
